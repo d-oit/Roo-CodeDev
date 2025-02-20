@@ -13,16 +13,32 @@ import {
 } from "../../shared/api"
 import { convertToMistralMessages } from "../transform/mistral-format"
 import { ApiStream } from "../transform/stream"
+import * as vscode from "vscode"
 
 const MISTRAL_DEFAULT_TEMPERATURE = 0
 
 export class MistralHandler implements ApiHandler {
 	private options: ApiHandlerOptions
 	private client: Mistral
+	private readonly enableDebugOutput: boolean
+	private readonly outputChannel?: vscode.OutputChannel
+
+	private static readonly outputChannelName = "Roo Code Mistral"
+	private static sharedOutputChannel: vscode.OutputChannel | undefined
 
 	constructor(options: ApiHandlerOptions) {
 		if (!options.mistralApiKey) {
 			throw new Error("Mistral API key is required")
+		}
+
+		const config = vscode.workspace.getConfiguration("roo-cline")
+		this.enableDebugOutput = config.get<boolean>("enableMistralDebugOutput", false)
+
+		if (this.enableDebugOutput) {
+			if (!MistralHandler.sharedOutputChannel) {
+				MistralHandler.sharedOutputChannel = vscode.window.createOutputChannel(MistralHandler.outputChannelName)
+			}
+			this.outputChannel = MistralHandler.sharedOutputChannel
 		}
 
 		// Set default model ID if not provided
@@ -31,17 +47,34 @@ export class MistralHandler implements ApiHandler {
 			apiModelId: options.apiModelId || mistralDefaultModelId,
 		}
 
+		this.logDebug(`Initializing MistralHandler with options: ${JSON.stringify(options, null, 2)}`)
 		const baseUrl = this.getBaseUrl()
-		console.debug(`[Roo Code] MistralHandler using baseUrl: ${baseUrl}`)
+		this.logDebug(`MistralHandler using baseUrl: ${baseUrl}`)
+
+		const logger = this.enableDebugOutput
+			? {
+					group: (message: string) => this.logDebug(`[Mistral Group] ${message}`),
+					groupEnd: () => this.logDebug(`[Mistral GroupEnd]`),
+					log: (...args: any[]) => this.logDebug(`[Mistral Log] ${args.join(" ")}`),
+				}
+			: undefined
+
 		this.client = new Mistral({
 			serverURL: baseUrl,
 			apiKey: this.options.mistralApiKey,
+			debugLogger: logger,
 		})
+	}
+
+	private logDebug(message: string) {
+		if (this.enableDebugOutput && this.outputChannel) {
+			this.outputChannel.appendLine(`[Roo Code] ${message}`)
+		}
 	}
 
 	private getBaseUrl(): string {
 		const modelId = this.options.apiModelId ?? mistralDefaultModelId
-		console.debug(`[Roo Code] MistralHandler using modelId: ${modelId}`)
+		this.logDebug(`MistralHandler using modelId: ${modelId}`)
 		if (modelId?.startsWith("codestral-")) {
 			return this.options.mistralCodestralUrl || "https://codestral.mistral.ai"
 		}
@@ -49,12 +82,15 @@ export class MistralHandler implements ApiHandler {
 	}
 
 	async *createMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream {
+		this.logDebug(`Creating message with system prompt: ${systemPrompt}`)
 		const response = await this.client.chat.stream({
 			model: this.options.apiModelId || mistralDefaultModelId,
 			messages: [{ role: "system", content: systemPrompt }, ...convertToMistralMessages(messages)],
-			maxTokens: this.options.includeMaxTokens ? this.getModel().info.maxTokens : undefined,
 			temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
+			stream: this.options.mistralModelStreamingEnabled,
 		})
+
+		let completeContent = ""
 
 		for await (const chunk of response) {
 			const delta = chunk.data.choices[0]?.delta
@@ -65,6 +101,7 @@ export class MistralHandler implements ApiHandler {
 				} else if (Array.isArray(delta.content)) {
 					content = delta.content.map((c) => (c.type === "text" ? c.text : "")).join("")
 				}
+				completeContent += content
 				yield {
 					type: "text",
 					text: content,
@@ -72,6 +109,10 @@ export class MistralHandler implements ApiHandler {
 			}
 
 			if (chunk.data.usage) {
+				this.logDebug(`Complete content: ${completeContent}`)
+				this.logDebug(
+					`Usage - Input tokens: ${chunk.data.usage.promptTokens}, Output tokens: ${chunk.data.usage.completionTokens}`,
+				)
 				yield {
 					type: "usage",
 					inputTokens: chunk.data.usage.promptTokens || 0,
@@ -85,8 +126,10 @@ export class MistralHandler implements ApiHandler {
 		const modelId = this.options.apiModelId
 		if (modelId && modelId in mistralModels) {
 			const id = modelId as MistralModelId
+			this.logDebug(`Using model: ${id}`)
 			return { id, info: mistralModels[id] }
 		}
+		this.logDebug(`Using default model: ${mistralDefaultModelId}`)
 		return {
 			id: mistralDefaultModelId,
 			info: mistralModels[mistralDefaultModelId],
@@ -95,6 +138,7 @@ export class MistralHandler implements ApiHandler {
 
 	async completePrompt(prompt: string): Promise<string> {
 		try {
+			this.logDebug(`Completing prompt: ${prompt}`)
 			const response = await this.client.chat.complete({
 				model: this.options.apiModelId || mistralDefaultModelId,
 				messages: [{ role: "user", content: prompt }],
@@ -103,11 +147,15 @@ export class MistralHandler implements ApiHandler {
 
 			const content = response.choices?.[0]?.message.content
 			if (Array.isArray(content)) {
-				return content.map((c) => (c.type === "text" ? c.text : "")).join("")
+				const result = content.map((c) => (c.type === "text" ? c.text : "")).join("")
+				this.logDebug(`Completion result: ${result}`)
+				return result
 			}
+			this.logDebug(`Completion result: ${content}`)
 			return content || ""
 		} catch (error) {
 			if (error instanceof Error) {
+				this.logDebug(`Completion error: ${error.message}`)
 				throw new Error(`Mistral completion error: ${error.message}`)
 			}
 			throw error

@@ -347,6 +347,16 @@ const ApiOptions = ({
 							</p>
 						</div>
 					)}
+
+					<p>
+						<div style={{ display: "flex", alignItems: "center" }}>
+							<Checkbox
+								checked={apiConfiguration?.mistralModelStreamingEnabled}
+								onChange={handleInputChange("mistralModelStreamingEnabled", noTransform)}>
+								Enable streaming
+							</Checkbox>
+						</div>
+					</p>
 				</div>
 			)}
 

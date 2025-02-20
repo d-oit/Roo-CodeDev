@@ -128,6 +128,7 @@ type GlobalStateKey =
 	| "unboundModelInfo"
 	| "modelTemperature"
 	| "mistralCodestralUrl"
+	| "mistralModelStreamingEnabled"
 	| "maxOpenTabsContext"
 
 export const GlobalFileNames = {
@@ -1669,6 +1670,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			vsCodeLmModelSelector,
 			mistralApiKey,
 			mistralCodestralUrl,
+			mistralModelStreamingEnabled,
 			unboundApiKey,
 			unboundModelId,
 			unboundModelInfo,
@@ -1709,6 +1711,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			this.storeSecret("deepSeekApiKey", deepSeekApiKey),
 			this.updateGlobalState("azureApiVersion", azureApiVersion),
 			this.updateGlobalState("openAiStreamingEnabled", openAiStreamingEnabled),
+			this.updateGlobalState("mistralModelStreamingEnabled", mistralModelStreamingEnabled),
 			this.updateGlobalState("openRouterModelId", openRouterModelId),
 			this.updateGlobalState("openRouterModelInfo", openRouterModelInfo),
 			this.updateGlobalState("openRouterBaseUrl", openRouterBaseUrl),
@@ -2556,6 +2559,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			deepSeekApiKey,
 			mistralApiKey,
 			mistralCodestralUrl,
+			mistralModelStreamingEnabled,
 			azureApiVersion,
 			openAiStreamingEnabled,
 			openRouterModelId,
@@ -2638,6 +2642,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			this.getSecret("deepSeekApiKey") as Promise<string | undefined>,
 			this.getSecret("mistralApiKey") as Promise<string | undefined>,
 			this.getGlobalState("mistralCodestralUrl") as Promise<string | undefined>,
+			this.getGlobalState("mistralModelStreamingEnabled") as Promise<boolean | undefined>,
 			this.getGlobalState("azureApiVersion") as Promise<string | undefined>,
 			this.getGlobalState("openAiStreamingEnabled") as Promise<boolean | undefined>,
 			this.getGlobalState("openRouterModelId") as Promise<string | undefined>,
@@ -2737,6 +2742,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 				deepSeekApiKey,
 				mistralApiKey,
 				mistralCodestralUrl,
+				mistralModelStreamingEnabled,
 				azureApiVersion,
 				openAiStreamingEnabled,
 				openRouterModelId,

@@ -274,6 +274,11 @@
 					"type": "boolean",
 					"default": false,
 					"description": "Enable debug output channel for Mistral API interactions"
+				},
+				"roo-cline.enableApiStreamDebugOutput": {
+					"type": "boolean",
+					"default": false,
+					"description": "Enable debug output for API streaming operations"
 				}
 			}
 		}

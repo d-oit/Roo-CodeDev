@@ -1,16 +1,7 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { Mistral } from "@mistralai/mistralai"
 import { ApiHandler } from "../"
-import {
-	ApiHandlerOptions,
-	mistralDefaultModelId,
-	MistralModelId,
-	mistralModels,
-	ModelInfo,
-	openAiNativeDefaultModelId,
-	OpenAiNativeModelId,
-	openAiNativeModels,
-} from "../../shared/api"
+import { ApiHandlerOptions, mistralDefaultModelId, MistralModelId, mistralModels, ModelInfo } from "../../shared/api"
 import { convertToMistralMessages } from "../transform/mistral-format"
 import { ApiStream } from "../transform/stream"
 import * as vscode from "vscode"
@@ -55,7 +46,12 @@ export class MistralHandler implements ApiHandler {
 			? {
 					group: (message: string) => this.logDebug(`[Mistral Group] ${message}`),
 					groupEnd: () => this.logDebug(`[Mistral GroupEnd]`),
-					log: (...args: any[]) => this.logDebug(`[Mistral Log] ${args.join(" ")}`),
+					log: (...args: any[]) =>
+						this.logDebug(
+							`[Mistral Log] ${args
+								.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : arg))
+								.join(" ")}`,
+						),
 				}
 			: undefined
 
@@ -66,9 +62,10 @@ export class MistralHandler implements ApiHandler {
 		})
 	}
 
-	private logDebug(message: string) {
+	private logDebug(message: string | object) {
 		if (this.enableDebugOutput && this.outputChannel) {
-			this.outputChannel.appendLine(`[Roo Code] ${message}`)
+			const formattedMessage = typeof message === "object" ? JSON.stringify(message, null, 2) : message
+			this.outputChannel.appendLine(`[Roo Code] ${formattedMessage}`)
 		}
 	}
 
@@ -85,9 +82,10 @@ export class MistralHandler implements ApiHandler {
 		this.logDebug(`Creating message with system prompt: ${systemPrompt}`)
 		const response = await this.client.chat.stream({
 			model: this.options.apiModelId || mistralDefaultModelId,
+			maxTokens: this.options.includeMaxTokens ? this.getModel().info.maxTokens : undefined,
 			messages: [{ role: "system", content: systemPrompt }, ...convertToMistralMessages(messages)],
 			temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
-			stream: this.options.mistralModelStreamingEnabled,
+			stream: this.options.mistralModelStreamingEnabled ?? undefined,
 		})
 
 		let completeContent = ""

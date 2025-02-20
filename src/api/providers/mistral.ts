@@ -80,12 +80,13 @@ export class MistralHandler implements ApiHandler {
 
 	async *createMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream {
 		this.logDebug(`Creating message with system prompt: ${systemPrompt}`)
+
 		const response = await this.client.chat.stream({
-			model: this.options.apiModelId || mistralDefaultModelId,
-			maxTokens: this.options.includeMaxTokens ? this.getModel().info.maxTokens : undefined,
+			model: this.options?.apiModelId || mistralDefaultModelId,
+			maxTokens: this.options?.includeMaxTokens ? this.getModel().info.maxTokens : undefined,
 			messages: [{ role: "system", content: systemPrompt }, ...convertToMistralMessages(messages)],
-			temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
-			stream: this.options.mistralModelStreamingEnabled ?? undefined,
+			temperature: this.options?.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
+			...(this.options?.mistralModelStreamingEnabled === true && { stream: true }),
 		})
 
 		let completeContent = ""

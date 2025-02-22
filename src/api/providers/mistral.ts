@@ -23,7 +23,7 @@ export class MistralHandler implements ApiHandler {
 		}
 
 		const config = vscode.workspace.getConfiguration("roo-cline")
-		this.enableDebugOutput = config.get<boolean>("enableMistralDebugOutput", false)
+		this.enableDebugOutput = config.get<boolean>("debug.mistral", false)
 
 		if (this.enableDebugOutput) {
 			if (!MistralHandler.sharedOutputChannel) {

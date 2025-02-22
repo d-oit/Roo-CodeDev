@@ -76,8 +76,8 @@ type UserContent = Array<
 export class Cline {
 	private static readonly outputChannelName = "Roo Code Stream Output"
 	private static sharedOutputChannel: vscode.OutputChannel | undefined
-	private readonly enableStreamDebug: boolean
-	private readonly outputChannel?: vscode.OutputChannel
+	// private readonly enableStreamDebug: boolean
+	// private readonly outputChannel?: vscode.OutputChannel
 
 	readonly taskId: string
 	api: ApiHandler
@@ -135,15 +135,15 @@ export class Cline {
 		historyItem?: HistoryItem | undefined,
 		experiments?: Record<string, boolean>,
 	) {
-		const config = vscode.workspace.getConfiguration("roo-cline")
-		this.enableStreamDebug = config.get<boolean>("enableApiStreamDebugOutput", false)
+		// const config = vscode.workspace.getConfiguration("roo-cline")
+		// this.enableStreamDebug = config.get<boolean>("enableApiStreamDebugOutput", false)
 
-		if (this.enableStreamDebug) {
-			if (!Cline.sharedOutputChannel) {
-				Cline.sharedOutputChannel = vscode.window.createOutputChannel(Cline.outputChannelName)
-			}
-			this.outputChannel = Cline.sharedOutputChannel
-		}
+		// if (this.enableStreamDebug) {
+		//     if (!Cline.sharedOutputChannel) {
+		//         Cline.sharedOutputChannel = vscode.window.createOutputChannel(Cline.outputChannelName)
+		//     }
+		//     this.outputChannel = Cline.sharedOutputChannel
+		// }
 
 		if (!task && !images && !historyItem) {
 			throw new Error("Either historyItem or task/images must be provided")
@@ -175,11 +175,11 @@ export class Cline {
 		}
 	}
 
-	private logStreamDebug(message: string) {
-		if (this.enableStreamDebug && this.outputChannel) {
-			this.outputChannel.appendLine(`[Stream Debug] ${message}`)
-		}
-	}
+	// private logStreamDebug(message: string) {
+	//     if (this.enableStreamDebug && this.outputChannel) {
+	//         this.outputChannel.appendLine(`[Stream Debug] ${message}`)
+	//     }
+	// }
 
 	// Add method to update diffStrategy
 	async updateDiffStrategy(experimentalDiffStrategy?: boolean) {

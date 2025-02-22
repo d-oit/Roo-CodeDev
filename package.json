@@ -270,15 +270,16 @@
 					},
 					"description": "Settings for VSCode Language Model API"
 				},
-				"roo-cline.enableMistralDebugOutput": {
-					"type": "boolean",
-					"default": false,
-					"description": "Enable debug output channel for Mistral API interactions"
-				},
-				"roo-cline.enableApiStreamDebugOutput": {
-					"type": "boolean",
-					"default": false,
-					"description": "Enable debug output for API streaming operations"
+				"roo-cline.debug": {
+					"type": "object",
+					"description": "Debug settings for Roo Code",
+					"properties": {
+						"mistral": {
+							"type": "boolean",
+							"default": false,
+							"description": "Enable debug output channel for Mistral API interactions"
+						}
+					}
 				}
 			}
 		}

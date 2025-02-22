@@ -348,6 +348,16 @@ const ApiOptions = ({
 						</div>
 					)}
 
+					<p>
+						<div style={{ display: "flex", alignItems: "center" }}>
+							<Checkbox
+								checked={apiConfiguration?.mistralModelStreamingEnabled}
+								onChange={handleInputChange("mistralModelStreamingEnabled", noTransform)}>
+								Enable streaming
+							</Checkbox>
+						</div>
+					</p>
+
 					<VSCodeTextField
 						value={apiConfiguration?.stopToken}
 						style={{ width: "100%", marginTop: "10px" }}
@@ -362,16 +372,6 @@ const ApiOptions = ({
 							color: "var(--vscode-descriptionForeground)",
 						}}>
 						Optional token to stop generation when encountered
-					</p>
-
-					<p>
-						<div style={{ display: "flex", alignItems: "center" }}>
-							<Checkbox
-								checked={apiConfiguration?.mistralModelStreamingEnabled}
-								onChange={handleInputChange("mistralModelStreamingEnabled", noTransform)}>
-								Enable streaming
-							</Checkbox>
-						</div>
 					</p>
 				</div>
 			)}

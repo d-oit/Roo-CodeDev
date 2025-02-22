@@ -42,23 +42,31 @@ export class MistralHandler implements ApiHandler {
 		const baseUrl = this.getBaseUrl()
 		this.logDebug(`MistralHandler using baseUrl: ${baseUrl}`)
 
-		const logger = this.enableDebugOutput
-			? {
-					group: (message: string) => this.logDebug(`[Mistral Group] ${message}`),
-					groupEnd: () => this.logDebug(`[Mistral GroupEnd]`),
-					log: (...args: any[]) =>
-						this.logDebug(
-							`[Mistral Log] ${args
-								.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : arg))
-								.join(" ")}`,
-						),
+		const logger = {
+			group: (message: string) => {
+				if (this.enableDebugOutput && this.outputChannel) {
+					this.outputChannel.appendLine(`[Mistral SDK] Group: ${message}`)
 				}
-			: undefined
+			},
+			groupEnd: () => {
+				if (this.enableDebugOutput && this.outputChannel) {
+					this.outputChannel.appendLine(`[Mistral SDK] GroupEnd`)
+				}
+			},
+			log: (...args: any[]) => {
+				if (this.enableDebugOutput && this.outputChannel) {
+					const formattedArgs = args
+						.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : arg))
+						.join(" ")
+					this.outputChannel.appendLine(`[Mistral SDK] ${formattedArgs}`)
+				}
+			},
+		}
 
 		this.client = new Mistral({
 			serverURL: baseUrl,
 			apiKey: this.options.mistralApiKey,
-			debugLogger: logger,
+			debugLogger: this.enableDebugOutput ? logger : undefined,
 		})
 	}
 
@@ -87,6 +95,7 @@ export class MistralHandler implements ApiHandler {
 			messages: [{ role: "system", content: systemPrompt }, ...convertToMistralMessages(messages)],
 			temperature: this.options?.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
 			...(this.options?.mistralModelStreamingEnabled === true && { stream: true }),
+			...(this.options?.stopToken?.trim() && { stop: [this.options.stopToken] }),
 		})
 
 		let completeContent = ""

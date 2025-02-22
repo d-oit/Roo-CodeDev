@@ -74,11 +74,6 @@ type UserContent = Array<
 >
 
 export class Cline {
-	private static readonly outputChannelName = "Roo Code Stream Output"
-	private static sharedOutputChannel: vscode.OutputChannel | undefined
-	// private readonly enableStreamDebug: boolean
-	// private readonly outputChannel?: vscode.OutputChannel
-
 	readonly taskId: string
 	api: ApiHandler
 	private terminalManager: TerminalManager
@@ -135,16 +130,6 @@ export class Cline {
 		historyItem?: HistoryItem | undefined,
 		experiments?: Record<string, boolean>,
 	) {
-		// const config = vscode.workspace.getConfiguration("roo-cline")
-		// this.enableStreamDebug = config.get<boolean>("enableApiStreamDebugOutput", false)
-
-		// if (this.enableStreamDebug) {
-		//     if (!Cline.sharedOutputChannel) {
-		//         Cline.sharedOutputChannel = vscode.window.createOutputChannel(Cline.outputChannelName)
-		//     }
-		//     this.outputChannel = Cline.sharedOutputChannel
-		// }
-
 		if (!task && !images && !historyItem) {
 			throw new Error("Either historyItem or task/images must be provided")
 		}
@@ -174,12 +159,6 @@ export class Cline {
 			this.resumeTaskFromHistory()
 		}
 	}
-
-	// private logStreamDebug(message: string) {
-	//     if (this.enableStreamDebug && this.outputChannel) {
-	//         this.outputChannel.appendLine(`[Stream Debug] ${message}`)
-	//     }
-	// }
 
 	// Add method to update diffStrategy
 	async updateDiffStrategy(experimentalDiffStrategy?: boolean) {
@@ -986,17 +965,12 @@ export class Cline {
 		const iterator = stream[Symbol.asyncIterator]()
 
 		try {
-			this.logStreamDebug(
-				`Starting API request - Previous index: ${previousApiReqIndex}, Retry attempt: ${retryAttempt}`,
-			)
 			// awaiting first chunk to see if it will throw an error
 			this.isWaitingForFirstChunk = true
 			const firstChunk = await iterator.next()
-			this.logStreamDebug(`Received first chunk: ${JSON.stringify(firstChunk.value)}`)
 			yield firstChunk.value
 			this.isWaitingForFirstChunk = false
 		} catch (error) {
-			this.logStreamDebug(`Error on first chunk: ${error}`)
 			// note that this api_req_failed ask is unique in that we only present this option if the api hasn't streamed any content yet (ie it fails on the first chunk due), as it would allow them to hit a retry button. However if the api failed mid-stream, it could be in any arbitrary state where some tools may have executed, so that error is handled differently and requires cancelling the task entirely.
 			if (alwaysApproveResubmit) {
 				const errorMsg = error.message ?? "Unknown error"

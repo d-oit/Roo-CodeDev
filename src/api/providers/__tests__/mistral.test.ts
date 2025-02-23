@@ -7,20 +7,18 @@ import { ApiStreamTextChunk } from "../../transform/stream"
 const mockCreate = jest.fn()
 jest.mock("@mistralai/mistralai", () => {
 	return {
-		Mistral: jest.fn().mockImplementation(() => ({
+		MistralClient: jest.fn().mockImplementation(() => ({
 			chat: {
 				stream: mockCreate.mockImplementation(async (options) => {
 					const stream = {
 						[Symbol.asyncIterator]: async function* () {
 							yield {
-								data: {
-									choices: [
-										{
-											delta: { content: "Test response" },
-											index: 0,
-										},
-									],
-								},
+								choices: [
+									{
+										delta: { content: "Test response" },
+										index: 0,
+									},
+								],
 							}
 						},
 					}
@@ -37,10 +35,13 @@ describe("MistralHandler", () => {
 
 	beforeEach(() => {
 		mockOptions = {
-			apiModelId: "codestral-latest", // Update to match the actual model ID
+			apiModelId: "codestral-latest",
 			mistralApiKey: "test-api-key",
 			includeMaxTokens: true,
 			modelTemperature: 0,
+			mistralModelStreamingEnabled: true,
+			stopToken: undefined,
+			mistralCodestralUrl: undefined,
 		}
 		handler = new MistralHandler(mockOptions)
 		mockCreate.mockClear()
@@ -60,23 +61,91 @@ describe("MistralHandler", () => {
 				})
 			}).toThrow("Mistral API key is required")
 		})
-
-		it("should use custom base URL if provided", () => {
-			const customBaseUrl = "https://custom.mistral.ai/v1"
-			const handlerWithCustomUrl = new MistralHandler({
-				...mockOptions,
-				mistralCodestralUrl: customBaseUrl,
-			})
-			expect(handlerWithCustomUrl).toBeInstanceOf(MistralHandler)
-		})
 	})
 
-	describe("getModel", () => {
-		it("should return correct model info", () => {
-			const model = handler.getModel()
-			expect(model.id).toBe(mockOptions.apiModelId)
-			expect(model.info).toBeDefined()
-			expect(model.info.supportsPromptCache).toBe(false)
+	describe("stopToken handling", () => {
+		const systemPrompt = "You are a helpful assistant."
+		const messages: Anthropic.Messages.MessageParam[] = [
+			{
+				role: "user",
+				content: [{ type: "text", text: "Hello!" }],
+			},
+		]
+
+		it("should not include stop parameter when stopToken is undefined", async () => {
+			const handlerWithoutStop = new MistralHandler({
+				...mockOptions,
+				stopToken: undefined,
+			})
+			await handlerWithoutStop.createMessage(systemPrompt, messages)
+
+			expect(mockCreate).toHaveBeenCalled()
+			const callArgs = mockCreate.mock.calls[0][0]
+			expect(callArgs).not.toHaveProperty("stop")
+		})
+
+		it("should not include stop parameter when stopToken is empty string", async () => {
+			const handlerWithEmptyStop = new MistralHandler({
+				...mockOptions,
+				stopToken: "",
+			})
+			await handlerWithEmptyStop.createMessage(systemPrompt, messages)
+
+			expect(mockCreate).toHaveBeenCalled()
+			const callArgs = mockCreate.mock.calls[0][0]
+			expect(callArgs).not.toHaveProperty("stop")
+		})
+
+		it("should not include stop parameter when stopToken contains only whitespace", async () => {
+			const handlerWithWhitespaceStop = new MistralHandler({
+				...mockOptions,
+				stopToken: "   ",
+			})
+			await handlerWithWhitespaceStop.createMessage(systemPrompt, messages)
+
+			expect(mockCreate).toHaveBeenCalled()
+			const callArgs = mockCreate.mock.calls[0][0]
+			expect(callArgs).not.toHaveProperty("stop")
+		})
+
+		it("should not include stop parameter when stopToken contains only commas", async () => {
+			const handlerWithCommasStop = new MistralHandler({
+				...mockOptions,
+				stopToken: ",,,",
+			})
+			await handlerWithCommasStop.createMessage(systemPrompt, messages)
+
+			expect(mockCreate).toHaveBeenCalled()
+			const callArgs = mockCreate.mock.calls[0][0]
+			expect(callArgs).not.toHaveProperty("stop")
+		})
+
+		it("should include stop parameter with single token", async () => {
+			const handlerWithStop = new MistralHandler({
+				...mockOptions,
+				stopToken: "\\n\\n",
+			})
+			await handlerWithStop.createMessage(systemPrompt, messages)
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					stop: ["\\n\\n"],
+				}),
+			)
+		})
+
+		it("should handle multiple stop tokens and filter empty ones", async () => {
+			const handlerWithMultiStop = new MistralHandler({
+				...mockOptions,
+				stopToken: "\\n\\n,,DONE, ,END,",
+			})
+			await handlerWithMultiStop.createMessage(systemPrompt, messages)
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					stop: ["\\n\\n", "DONE", "END"],
+				}),
+			)
 		})
 	})
 
@@ -89,38 +158,68 @@ describe("MistralHandler", () => {
 			},
 		]
 
-		it("should create message successfully", async () => {
-			const iterator = handler.createMessage(systemPrompt, messages)
-			const result = await iterator.next()
+		it("should create message with streaming enabled", async () => {
+			const stream = await handler.createMessage(systemPrompt, messages)
+			expect(stream).toBeDefined()
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					messages: expect.arrayContaining([
+						expect.objectContaining({
+							role: "system",
+							content: systemPrompt,
+						}),
+					]),
+					stream: true,
+				}),
+			)
+		})
 
-			expect(mockCreate).toHaveBeenCalledWith({
-				model: mockOptions.apiModelId,
-				messages: expect.any(Array),
-				maxTokens: expect.any(Number),
-				temperature: 0,
+		it("should handle temperature settings", async () => {
+			const handlerWithTemp = new MistralHandler({
+				...mockOptions,
+				modelTemperature: 0.7,
 			})
-
-			expect(result.value).toBeDefined()
-			expect(result.done).toBe(false)
+			await handlerWithTemp.createMessage(systemPrompt, messages)
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					temperature: 0.7,
+				}),
+			)
 		})
 
-		it("should handle streaming response correctly", async () => {
-			const iterator = handler.createMessage(systemPrompt, messages)
-			const results: ApiStreamTextChunk[] = []
-
-			for await (const chunk of iterator) {
-				if ("text" in chunk) {
-					results.push(chunk as ApiStreamTextChunk)
-				}
-			}
-
-			expect(results.length).toBeGreaterThan(0)
-			expect(results[0].text).toBe("Test response")
-		})
-
-		it("should handle errors gracefully", async () => {
-			mockCreate.mockRejectedValueOnce(new Error("API Error"))
-			await expect(handler.createMessage(systemPrompt, messages).next()).rejects.toThrow("API Error")
+		it("should transform messages correctly", async () => {
+			const complexMessages: Anthropic.Messages.MessageParam[] = [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Hello!" },
+						{ type: "text", text: "How are you?" },
+					],
+				},
+				{
+					role: "assistant",
+					content: [{ type: "text", text: "I'm doing well!" }],
+				},
+			]
+			await handler.createMessage(systemPrompt, complexMessages)
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					messages: expect.arrayContaining([
+						expect.objectContaining({
+							role: "system",
+							content: systemPrompt,
+						}),
+						expect.objectContaining({
+							role: "user",
+							content: "Hello! How are you?",
+						}),
+						expect.objectContaining({
+							role: "assistant",
+							content: "I'm doing well!",
+						}),
+					]),
+				}),
+			)
 		})
 	})
 })

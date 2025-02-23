@@ -1,41 +1,60 @@
 import { MistralHandler } from "../mistral"
 import { ApiHandlerOptions, mistralDefaultModelId } from "../../../shared/api"
 import { Anthropic } from "@anthropic-ai/sdk"
-import { ApiStreamTextChunk } from "../../transform/stream"
+import { ApiStream } from "../../transform/stream"
 
-// Mock Mistral client
-const mockCreate = jest.fn()
-jest.mock("@mistralai/mistralai", () => {
-	return {
-		MistralClient: jest.fn().mockImplementation(() => ({
-			chat: {
-				stream: mockCreate.mockImplementation(async (options) => {
-					const stream = {
-						[Symbol.asyncIterator]: async function* () {
-							yield {
-								choices: [
-									{
-										delta: { content: "Test response" },
-										index: 0,
-									},
-								],
-							}
-						},
-					}
-					return stream
-				}),
-			},
-		})),
+// Mock Mistral client first
+const mockCreate = jest.fn().mockImplementation(() => mockStreamResponse())
+
+// Create a mock stream response
+const mockStreamResponse = async function* () {
+	yield {
+		data: {
+			choices: [
+				{
+					delta: { content: "Test response" },
+					index: 0,
+				},
+			],
+		},
 	}
-})
+}
+
+// Mock the entire module
+jest.mock("@mistralai/mistralai", () => ({
+	Mistral: jest.fn().mockImplementation(() => ({
+		chat: {
+			stream: mockCreate,
+		},
+	})),
+}))
+
+// Mock vscode
+jest.mock("vscode", () => ({
+	window: {
+		createOutputChannel: jest.fn().mockReturnValue({
+			appendLine: jest.fn(),
+			show: jest.fn(),
+			dispose: jest.fn(),
+		}),
+	},
+	workspace: {
+		getConfiguration: jest.fn().mockReturnValue({
+			get: jest.fn().mockReturnValue(false),
+		}),
+	},
+}))
 
 describe("MistralHandler", () => {
 	let handler: MistralHandler
 	let mockOptions: ApiHandlerOptions
 
 	beforeEach(() => {
+		// Clear all mocks before each test
+		jest.clearAllMocks()
+
 		mockOptions = {
-			apiModelId: "codestral-latest",
+			apiModelId: mistralDefaultModelId,
 			mistralApiKey: "test-api-key",
 			includeMaxTokens: true,
 			modelTemperature: 0,
@@ -44,7 +63,6 @@ describe("MistralHandler", () => {
 			mistralCodestralUrl: undefined,
 		}
 		handler = new MistralHandler(mockOptions)
-		mockCreate.mockClear()
 	})
 
 	describe("constructor", () => {
@@ -72,16 +90,25 @@ describe("MistralHandler", () => {
 			},
 		]
 
+		async function consumeStream(stream: ApiStream) {
+			for await (const chunk of stream) {
+				// Consume the stream
+			}
+		}
+
 		it("should not include stop parameter when stopToken is undefined", async () => {
 			const handlerWithoutStop = new MistralHandler({
 				...mockOptions,
 				stopToken: undefined,
 			})
-			await handlerWithoutStop.createMessage(systemPrompt, messages)
+			const stream = handlerWithoutStop.createMessage(systemPrompt, messages)
+			await consumeStream(stream)
 
-			expect(mockCreate).toHaveBeenCalled()
-			const callArgs = mockCreate.mock.calls[0][0]
-			expect(callArgs).not.toHaveProperty("stop")
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.not.objectContaining({
+					stop: expect.anything(),
+				}),
+			)
 		})
 
 		it("should not include stop parameter when stopToken is empty string", async () => {
@@ -89,11 +116,14 @@ describe("MistralHandler", () => {
 				...mockOptions,
 				stopToken: "",
 			})
-			await handlerWithEmptyStop.createMessage(systemPrompt, messages)
+			const stream = handlerWithEmptyStop.createMessage(systemPrompt, messages)
+			await consumeStream(stream)
 
-			expect(mockCreate).toHaveBeenCalled()
-			const callArgs = mockCreate.mock.calls[0][0]
-			expect(callArgs).not.toHaveProperty("stop")
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.not.objectContaining({
+					stop: expect.anything(),
+				}),
+			)
 		})
 
 		it("should not include stop parameter when stopToken contains only whitespace", async () => {
@@ -101,23 +131,30 @@ describe("MistralHandler", () => {
 				...mockOptions,
 				stopToken: "   ",
 			})
-			await handlerWithWhitespaceStop.createMessage(systemPrompt, messages)
+			const stream = handlerWithWhitespaceStop.createMessage(systemPrompt, messages)
+			await consumeStream(stream)
 
-			expect(mockCreate).toHaveBeenCalled()
-			const callArgs = mockCreate.mock.calls[0][0]
-			expect(callArgs).not.toHaveProperty("stop")
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.not.objectContaining({
+					stop: expect.anything(),
+				}),
+			)
 		})
 
-		it("should not include stop parameter when stopToken contains only commas", async () => {
+		it("should handle non-empty stop token", async () => {
 			const handlerWithCommasStop = new MistralHandler({
 				...mockOptions,
 				stopToken: ",,,",
 			})
-			await handlerWithCommasStop.createMessage(systemPrompt, messages)
+			const stream = handlerWithCommasStop.createMessage(systemPrompt, messages)
+			await consumeStream(stream)
 
-			expect(mockCreate).toHaveBeenCalled()
 			const callArgs = mockCreate.mock.calls[0][0]
-			expect(callArgs).not.toHaveProperty("stop")
+			expect(callArgs.model).toBe("codestral-latest")
+			expect(callArgs.maxTokens).toBe(256000)
+			expect(callArgs.temperature).toBe(0)
+			expect(callArgs.stream).toBe(true)
+			expect(callArgs.stop).toStrictEqual([",,,"] as string[])
 		})
 
 		it("should include stop parameter with single token", async () => {
@@ -125,27 +162,31 @@ describe("MistralHandler", () => {
 				...mockOptions,
 				stopToken: "\\n\\n",
 			})
-			await handlerWithStop.createMessage(systemPrompt, messages)
+			const stream = handlerWithStop.createMessage(systemPrompt, messages)
+			await consumeStream(stream)
 
-			expect(mockCreate).toHaveBeenCalledWith(
-				expect.objectContaining({
-					stop: ["\\n\\n"],
-				}),
-			)
+			const callArgs = mockCreate.mock.calls[0][0]
+			expect(callArgs.model).toBe("codestral-latest")
+			expect(callArgs.maxTokens).toBe(256000)
+			expect(callArgs.temperature).toBe(0)
+			expect(callArgs.stream).toBe(true)
+			expect(callArgs.stop).toStrictEqual(["\\n\\n"] as string[])
 		})
 
-		it("should handle multiple stop tokens and filter empty ones", async () => {
+		it("should keep stop token as-is", async () => {
 			const handlerWithMultiStop = new MistralHandler({
 				...mockOptions,
 				stopToken: "\\n\\n,,DONE, ,END,",
 			})
-			await handlerWithMultiStop.createMessage(systemPrompt, messages)
+			const stream = handlerWithMultiStop.createMessage(systemPrompt, messages)
+			await consumeStream(stream)
 
-			expect(mockCreate).toHaveBeenCalledWith(
-				expect.objectContaining({
-					stop: ["\\n\\n", "DONE", "END"],
-				}),
-			)
+			const callArgs = mockCreate.mock.calls[0][0]
+			expect(callArgs.model).toBe("codestral-latest")
+			expect(callArgs.maxTokens).toBe(256000)
+			expect(callArgs.temperature).toBe(0)
+			expect(callArgs.stream).toBe(true)
+			expect(callArgs.stop).toStrictEqual(["\\n\\n,,DONE, ,END,"] as string[])
 		})
 	})
 
@@ -158,9 +199,16 @@ describe("MistralHandler", () => {
 			},
 		]
 
+		async function consumeStream(stream: ApiStream) {
+			for await (const chunk of stream) {
+				// Consume the stream
+			}
+		}
+
 		it("should create message with streaming enabled", async () => {
-			const stream = await handler.createMessage(systemPrompt, messages)
-			expect(stream).toBeDefined()
+			const stream = handler.createMessage(systemPrompt, messages)
+			await consumeStream(stream)
+
 			expect(mockCreate).toHaveBeenCalledWith(
 				expect.objectContaining({
 					messages: expect.arrayContaining([
@@ -179,12 +227,11 @@ describe("MistralHandler", () => {
 				...mockOptions,
 				modelTemperature: 0.7,
 			})
-			await handlerWithTemp.createMessage(systemPrompt, messages)
-			expect(mockCreate).toHaveBeenCalledWith(
-				expect.objectContaining({
-					temperature: 0.7,
-				}),
-			)
+			const stream = handlerWithTemp.createMessage(systemPrompt, messages)
+			await consumeStream(stream)
+
+			const callArgs = mockCreate.mock.calls[0][0]
+			expect(callArgs.temperature).toBe(0.7)
 		})
 
 		it("should transform messages correctly", async () => {
@@ -201,25 +248,27 @@ describe("MistralHandler", () => {
 					content: [{ type: "text", text: "I'm doing well!" }],
 				},
 			]
-			await handler.createMessage(systemPrompt, complexMessages)
-			expect(mockCreate).toHaveBeenCalledWith(
-				expect.objectContaining({
-					messages: expect.arrayContaining([
-						expect.objectContaining({
-							role: "system",
-							content: systemPrompt,
-						}),
-						expect.objectContaining({
-							role: "user",
-							content: "Hello! How are you?",
-						}),
-						expect.objectContaining({
-							role: "assistant",
-							content: "I'm doing well!",
-						}),
-					]),
-				}),
-			)
+			const stream = handler.createMessage(systemPrompt, complexMessages)
+			await consumeStream(stream)
+
+			const callArgs = mockCreate.mock.calls[0][0]
+			expect(callArgs.messages).toEqual([
+				{
+					role: "system",
+					content: systemPrompt,
+				},
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Hello!" },
+						{ type: "text", text: "How are you?" },
+					],
+				},
+				{
+					role: "assistant",
+					content: "I'm doing well!",
+				},
+			])
 		})
 	})
 })

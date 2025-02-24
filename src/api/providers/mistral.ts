@@ -13,6 +13,7 @@ export class MistralHandler implements ApiHandler {
 	private client: Mistral
 	private readonly enableDebugOutput: boolean
 	private readonly outputChannel?: vscode.OutputChannel
+	private cachedModel: { id: MistralModelId; info: ModelInfo; forModelId: string | undefined } | null = null
 
 	private static readonly outputChannelName = "Roo Code Mistral"
 	private static sharedOutputChannel: vscode.OutputChannel | undefined
@@ -20,6 +21,30 @@ export class MistralHandler implements ApiHandler {
 	constructor(options: ApiHandlerOptions) {
 		if (!options.mistralApiKey) {
 			throw new Error("Mistral API key is required")
+		}
+
+		// Clear cached model if options change
+		this.cachedModel = null
+
+		// Destructure only the options we need
+		const {
+			apiModelId,
+			mistralApiKey,
+			mistralCodestralUrl,
+			mistralModelStreamingEnabled,
+			modelTemperature,
+			stopToken,
+			includeMaxTokens,
+		} = options
+
+		this.options = {
+			apiModelId: apiModelId || mistralDefaultModelId,
+			mistralApiKey,
+			mistralCodestralUrl,
+			mistralModelStreamingEnabled,
+			modelTemperature,
+			stopToken,
+			includeMaxTokens,
 		}
 
 		const config = vscode.workspace.getConfiguration("roo-cline")
@@ -32,13 +57,7 @@ export class MistralHandler implements ApiHandler {
 			this.outputChannel = MistralHandler.sharedOutputChannel
 		}
 
-		// Set default model ID if not provided
-		this.options = {
-			...options,
-			apiModelId: options.apiModelId || mistralDefaultModelId,
-		}
-
-		this.logDebug(`Initializing MistralHandler with options: ${JSON.stringify(options, null, 2)}`)
+		this.logDebug(`Initializing MistralHandler with options: ${JSON.stringify(this.options, null, 2)}`)
 		const baseUrl = this.getBaseUrl()
 		this.logDebug(`MistralHandler using baseUrl: ${baseUrl}`)
 
@@ -131,16 +150,38 @@ export class MistralHandler implements ApiHandler {
 	}
 
 	getModel(): { id: MistralModelId; info: ModelInfo } {
+		// Check if cache exists and is for the current model
+		if (this.cachedModel && this.cachedModel.forModelId === this.options.apiModelId) {
+			return {
+				id: this.cachedModel.id,
+				info: this.cachedModel.info,
+			}
+		}
+
 		const modelId = this.options.apiModelId
 		if (modelId && modelId in mistralModels) {
 			const id = modelId as MistralModelId
 			this.logDebug(`Using model: ${id}`)
-			return { id, info: mistralModels[id] }
+			this.cachedModel = {
+				id,
+				info: mistralModels[id],
+				forModelId: modelId,
+			}
+			return {
+				id: this.cachedModel.id,
+				info: this.cachedModel.info,
+			}
 		}
+
 		this.logDebug(`Using default model: ${mistralDefaultModelId}`)
-		return {
+		this.cachedModel = {
 			id: mistralDefaultModelId,
 			info: mistralModels[mistralDefaultModelId],
+			forModelId: undefined,
+		}
+		return {
+			id: this.cachedModel.id,
+			info: this.cachedModel.info,
 		}
 	}
 

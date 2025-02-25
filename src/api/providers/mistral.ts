@@ -205,7 +205,7 @@ export class MistralHandler implements ApiHandler {
 		} catch (error) {
 			if (error instanceof Error) {
 				this.logDebug(`Completion error: ${error.message}`)
-				throw new Error(`Mistral completion error: ${error.message}`)
+				throw new Error(`Mistral completion error: ${error.message}`, { cause: error })
 			}
 			throw error
 		}

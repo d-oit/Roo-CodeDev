@@ -150,7 +150,7 @@ describe("MistralHandler", () => {
 			await consumeStream(stream)
 
 			const callArgs = mockCreate.mock.calls[0][0]
-			expect(callArgs.model).toBe("codestral-latest")
+			expect(callArgs.model).toBe(mistralDefaultModelId)
 			expect(callArgs.maxTokens).toBe(256000)
 			expect(callArgs.temperature).toBe(0)
 			expect(callArgs.stream).toBe(true)

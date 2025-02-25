@@ -363,7 +363,7 @@ const ApiOptions = ({
 						style={{ width: "100%", marginTop: "10px" }}
 						onInput={handleInputChange("stopToken")}
 						placeholder="Enter stop token (optional)">
-						<span style={{ fontWeight: 500 }}>Optional: Stop Token e.g. \n\\n\</span>
+						<span style={{ fontWeight: 500 }}>Optional: Stop Token e.g. \n\n</span>
 					</VSCodeTextField>
 					<p
 						style={{

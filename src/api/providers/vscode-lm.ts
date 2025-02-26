@@ -53,6 +53,34 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	private readonly LOG_DEBOUNCE_MS = 100
 	private readonly LOG_BATCH_SIZE = 10
 
+	/**
+	 * Cache for token counting
+	 */
+	private tokenCountCache = new Map<string, number>()
+	private readonly TOKEN_CACHE_MAX_SIZE = 100
+	private tokenCacheAccessTimes = new Map<string, number>()
+
+	/**
+	 * Cache for model information
+	 */
+	private modelInfoCache: Map<string, { id: string; info: ModelInfo }> = new Map()
+	private modelInfoCacheAccessTimes: Map<string, number> = new Map()
+	private readonly MODEL_CACHE_MAX_SIZE = 20 // Reasonable limit for model cache
+
+	/**
+	 * Constants for model handling
+	 */
+	private readonly SELECTOR_SEPARATOR = "/"
+	private readonly openAiModelInfoSaneDefaults: ModelInfo = {
+		maxTokens: 4096,
+		contextWindow: 8192,
+		supportsImages: false,
+		supportsPromptCache: true,
+		inputPrice: 0,
+		outputPrice: 0,
+		description: "VSCode Language Model",
+	}
+
 	constructor(options: ApiHandlerOptions) {
 		this.options = options
 		this.client = null
@@ -366,6 +394,12 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		this.cachedModel = null
 		this.cachedModelSelector = null
 
+		// Clear all caches
+		this.tokenCountCache.clear()
+		this.tokenCacheAccessTimes.clear()
+		this.modelInfoCache.clear()
+		this.modelInfoCacheAccessTimes.clear()
+
 		this.client = null
 		this.logInfo("VS Code LM Handler disposed")
 
@@ -378,9 +412,6 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 * @param text The text to count tokens for
 	 * @returns The number of tokens
 	 */
-	private tokenCountCache = new Map<string, number>()
-	private readonly TOKEN_CACHE_MAX_SIZE = 100
-
 	private async countTokens(text: string): Promise<number> {
 		// For very short texts, use a simple estimation to avoid API calls
 		if (!text || text.length === 0) {
@@ -394,7 +425,9 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		// Check cache first
 		const cacheKey = this.generateCacheKey(text)
 		if (this.tokenCountCache.has(cacheKey)) {
-			this.outputChannel.appendLine(`Using cached token count for text of length ${text.length}`)
+			// Update access time for this key (for better LRU implementation)
+			this.tokenCacheAccessTimes.set(cacheKey, Date.now())
+			this.log(`Using cached token count for text of length ${text.length}`)
 			return this.tokenCountCache.get(cacheKey) || 0
 		}
 
@@ -405,12 +438,11 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			// Cache the result
 			this.maintainCacheSize()
 			this.tokenCountCache.set(cacheKey, count)
+			this.tokenCacheAccessTimes.set(cacheKey, Date.now())
 
 			return count
 		} catch (error) {
-			this.outputChannel.appendLine(
-				`Token counting failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-			)
+			this.log(`Token counting failed: ${error instanceof Error ? error.message : "Unknown error"}`)
 			// Fallback to a simple estimation
 			return Math.ceil(text.length / 4)
 		}
@@ -432,14 +464,23 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	}
 
 	/**
-	 * Maintain the token cache size
+	 * Maintain the token cache size using a true LRU approach
 	 */
 	private maintainCacheSize(): void {
 		if (this.tokenCountCache.size >= this.TOKEN_CACHE_MAX_SIZE) {
-			// Remove oldest entries (first 20% of entries)
+			// Find the least recently used entries
+			const entries = Array.from(this.tokenCacheAccessTimes.entries()).sort((a, b) => a[1] - b[1]) // Sort by timestamp (oldest first)
+
+			// Remove oldest 20% of entries
 			const entriesToRemove = Math.ceil(this.TOKEN_CACHE_MAX_SIZE * 0.2)
-			const keys = Array.from(this.tokenCountCache.keys()).slice(0, entriesToRemove)
-			keys.forEach((key) => this.tokenCountCache.delete(key))
+			const keysToRemove = entries.slice(0, entriesToRemove).map((entry) => entry[0])
+
+			keysToRemove.forEach((key) => {
+				this.tokenCountCache.delete(key)
+				this.tokenCacheAccessTimes.delete(key)
+			})
+
+			this.log(`Removed ${keysToRemove.length} oldest entries from token cache`)
 		}
 	}
 
@@ -510,26 +551,34 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 */
 	private async getClient(): Promise<vscode.LanguageModelChat> {
 		try {
-			// If we already have a client, return it
-			if (this.client) {
-				// Log the maxInputTokens for the existing client
-				try {
-					const capabilities = await this.getModelCapabilities(this.client)
-					this.log(`Using existing client with max input tokens: ${capabilities.maxInputTokens || "Unknown"}`)
-				} catch (error) {
-					this.log(
-						`Failed to get existing client capabilities: ${error instanceof Error ? error.message : "Unknown error"}`,
-					)
-				}
+			// If we have a cached client and it exactly matches the current selector, use it
+			if (
+				this.cachedModel &&
+				this.cachedModelSelector &&
+				this.options.vsCodeLmModelSelector &&
+				this.areSelectorsEqual(this.cachedModelSelector, this.options.vsCodeLmModelSelector)
+			) {
+				this.logInfo("Using cached client (exact selector match)")
+				return this.cachedModel
+			}
 
-				return this.client
+			// If we have a cached client and it partially matches the current selector, use it
+			if (
+				this.cachedModel &&
+				this.cachedModelSelector &&
+				this.options.vsCodeLmModelSelector &&
+				this.areSelectorsPartialMatch(this.cachedModelSelector, this.options.vsCodeLmModelSelector)
+			) {
+				this.logInfo("Using cached client (partial selector match)")
+				return this.cachedModel
 			}
 
 			// Get the model selector from options
-			const selector = this.options.vsCodeLmModelSelector
-			if (!selector) {
-				throw new Error("VS Code LM model selector not provided in options")
-			}
+			const selector = this.options.vsCodeLmModelSelector || {}
+			this.logInfo(`Getting client with selector: ${JSON.stringify(selector)}`)
+
+			// Cache the selector for future comparisons
+			this.cachedModelSelector = { ...selector }
 
 			// Create a new client
 			this.client = await this.createClient(selector)
@@ -546,9 +595,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 
 			return this.client
 		} catch (error) {
-			const errorMessage = error instanceof Error ? error.message : "Unknown error"
-			this.logError(`Failed to get client: ${errorMessage}`)
-			throw new Error(`Roo Code <Language Model API>: Failed to get client: ${errorMessage}`)
+			throw this.handleError(error, "Get client")
 		}
 	}
 
@@ -836,12 +883,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	}
 
 	/**
-	 * Cache for model information
-	 */
-	private modelInfoCache: Map<string, { id: string; info: ModelInfo }> = new Map()
-
-	/**
-	 * Get model information with caching
+	 * Get model information with caching and cache management
 	 */
 	getModel(): { id: string; info: ModelInfo } {
 		this.log("Getting model information")
@@ -851,11 +893,15 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			// Generate a cache key based on client properties
 			const cacheKey =
 				this.client.id ||
-				[this.client.vendor, this.client.family, this.client.version].filter(Boolean).join(SELECTOR_SEPARATOR)
+				[this.client.vendor, this.client.family, this.client.version]
+					.filter(Boolean)
+					.join(this.SELECTOR_SEPARATOR)
 
 			// Check if we have cached info for this model
 			if (this.modelInfoCache.has(cacheKey)) {
 				this.log(`Using cached model info for ${cacheKey}`)
+				// Update access timestamp for LRU tracking
+				this.modelInfoCacheAccessTimes.set(cacheKey, Date.now())
 				return this.modelInfoCache.get(cacheKey)!
 			}
 
@@ -879,7 +925,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			const modelParts = [this.client.vendor, this.client.family, this.client.version].filter(Boolean)
 			this.log(`Model parts: ${modelParts.join(", ")}`)
 
-			const modelId = this.client.id || modelParts.join(SELECTOR_SEPARATOR)
+			const modelId = this.client.id || modelParts.join(this.SELECTOR_SEPARATOR)
 			this.log(`Using model ID: ${modelId}`)
 
 			// Build model info with conservative defaults for missing values
@@ -888,7 +934,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 				contextWindow:
 					typeof this.client.maxInputTokens === "number"
 						? Math.max(0, this.client.maxInputTokens)
-						: openAiModelInfoSaneDefaults.contextWindow,
+						: this.openAiModelInfoSaneDefaults.contextWindow,
 				supportsImages: false,
 				supportsPromptCache: true,
 				inputPrice: 0,
@@ -911,16 +957,20 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 				),
 			)
 
+			// Manage cache size before adding new entry
+			this.maintainModelCacheSize()
+
 			// Cache the model info
 			const result = { id: modelId, info: modelInfo }
 			this.modelInfoCache.set(cacheKey, result)
+			this.modelInfoCacheAccessTimes.set(cacheKey, Date.now())
 
 			return result
 		}
 
 		// Fallback when no client is available
 		const fallbackId = this.options.vsCodeLmModelSelector
-			? stringifyVsCodeLmModelSelector(this.options.vsCodeLmModelSelector)
+			? this.stringifyVsCodeLmModelSelector(this.options.vsCodeLmModelSelector)
 			: "vscode-lm"
 
 		this.log(`No client available, using fallback ID: ${fallbackId}`)
@@ -936,7 +986,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		const fallbackResult = {
 			id: fallbackId,
 			info: {
-				...openAiModelInfoSaneDefaults,
+				...this.openAiModelInfoSaneDefaults,
 				description: `VSCode Language Model (Fallback): ${fallbackId}`,
 			},
 		}
@@ -968,9 +1018,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			this.log(`Completion successful, received ${result.length} characters`)
 			return result
 		} catch (error) {
-			const errorMessage = error instanceof Error ? error.message : "Unknown error"
-			this.log(`Completion failed: ${errorMessage}`)
-			throw new Error(`VSCode LM completion error: ${errorMessage}`)
+			throw this.handleError(error, "Completion")
 		}
 	}
 
@@ -1161,13 +1209,17 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 
 			// Check if any model matches the selector criteria
 			return availableModels.some((model) => {
-				// Match based on provided selector properties
-				const vendorMatch = !selector.vendor || model.vendor === selector.vendor
-				const familyMatch = !selector.family || model.family === selector.family
-				const versionMatch = !selector.version || model.version === selector.version
-				const idMatch = !selector.id || model.id === selector.id
+				// Create a selector from the model
+				const modelSelector = {
+					vendor: model.vendor,
+					family: model.family,
+					version: model.version,
+					id: model.id,
+				}
 
-				return vendorMatch && familyMatch && versionMatch && idMatch
+				// Use areSelectorsEqual for partial matching
+				// This would need modification since we want partial matching here
+				return this.areSelectorsPartialMatch(selector, modelSelector)
 			})
 		} catch (error) {
 			this.logError(
@@ -1436,6 +1488,58 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 				`Failed to get model capabilities: ${error instanceof Error ? error.message : "Unknown error"}`,
 			)
 			return {}
+		}
+	}
+
+	/**
+	 * Check if selector2 matches all non-empty criteria in selector1
+	 * This is useful for partial matching where selector1 contains only the criteria we care about
+	 */
+	private areSelectorsPartialMatch(
+		selector1: vscode.LanguageModelChatSelector,
+		selector2: vscode.LanguageModelChatSelector,
+	): boolean {
+		// Match based on provided selector properties
+		const vendorMatch = !selector1.vendor || selector1.vendor === selector2.vendor
+		const familyMatch = !selector1.family || selector1.family === selector2.family
+		const versionMatch = !selector1.version || selector1.version === selector2.version
+		const idMatch = !selector1.id || selector1.id === selector2.id
+
+		return vendorMatch && familyMatch && versionMatch && idMatch
+	}
+
+	/**
+	 * Stringify a VS Code LM model selector for use as a cache key
+	 */
+	private stringifyVsCodeLmModelSelector(selector: vscode.LanguageModelChatSelector): string {
+		const parts: string[] = []
+
+		if (selector.vendor) parts.push(`vendor:${selector.vendor}`)
+		if (selector.family) parts.push(`family:${selector.family}`)
+		if (selector.version) parts.push(`version:${selector.version}`)
+		if (selector.id) parts.push(`id:${selector.id}`)
+
+		return parts.length > 0 ? parts.join(this.SELECTOR_SEPARATOR) : "vscode-lm-default"
+	}
+
+	/**
+	 * Maintain the model info cache size using LRU approach
+	 */
+	private maintainModelCacheSize(): void {
+		if (this.modelInfoCache.size >= this.MODEL_CACHE_MAX_SIZE) {
+			// Find the least recently used entries
+			const entries = Array.from(this.modelInfoCacheAccessTimes.entries()).sort((a, b) => a[1] - b[1]) // Sort by timestamp (oldest first)
+
+			// Remove oldest 20% of entries
+			const entriesToRemove = Math.ceil(this.MODEL_CACHE_MAX_SIZE * 0.2)
+			const keysToRemove = entries.slice(0, entriesToRemove).map((entry) => entry[0])
+
+			keysToRemove.forEach((key) => {
+				this.modelInfoCache.delete(key)
+				this.modelInfoCacheAccessTimes.delete(key)
+			})
+
+			this.log(`Removed ${keysToRemove.length} oldest entries from model info cache`)
 		}
 	}
 }

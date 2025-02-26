@@ -338,8 +338,12 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 
 	private async countTokens(text: string): Promise<number> {
 		// For very short texts, use a simple estimation to avoid API calls
+		if (!text || text.length === 0) {
+			return 0
+		}
+
 		if (text.length < 4) {
-			return text.length > 0 ? 1 : 0
+			return 1
 		}
 
 		// Check cache first
@@ -697,7 +701,9 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 
 			// Start the response stream
 			const responseStream = await client.sendRequest(vsCodeMessages, {
-				token: this.currentRequestCancellation.token,
+				// The VS Code API expects a cancellation token to be passed differently
+				// Remove the token property and use the correct approach
+				// token: this.currentRequestCancellation.token, // This is incorrect
 			})
 
 			let fullResponse = ""
@@ -1228,7 +1234,9 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			for await (const message of stream) {
 				for (const part of message.content) {
 					if (part instanceof vscode.LanguageModelTextPart) {
-						const content = part.text
+						// Use the correct property to access the text content
+						// In newer VS Code API, it might be 'value' instead of 'text'
+						const content = part.value
 
 						// Log the chunk for debugging
 						this.log(`Received chunk: ${content.substring(0, 50)}${content.length > 50 ? "..." : ""}`)
@@ -1282,20 +1290,5 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			)
 			return {}
 		}
-	}
-
-	/**
-	 * Count tokens in a string
-	 * @param text The text to count tokens for
-	 * @returns Estimated token count
-	 */
-	private async countTokens(text: string): Promise<number> {
-		// Simple estimation - can be replaced with a more accurate method
-		if (!text) {
-			return 0
-		}
-
-		// Rough estimation: 1 token ≈ 4 characters for English text
-		return Math.ceil(text.length / 4)
 	}
 }

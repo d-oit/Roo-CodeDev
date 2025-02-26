@@ -28,6 +28,27 @@ function asObjectSafe(value: any): object {
 	}
 }
 
+// Helper function to handle image blocks consistently
+function createImageTextPart(part: Anthropic.ImageBlockParam): vscode.LanguageModelTextPart {
+	return new vscode.LanguageModelTextPart(
+		`[Image (${part.source?.type || "Unknown source-type"}): ${part.source?.media_type || "unknown media-type"} not supported by VSCode LM API]`,
+	)
+}
+
+// Helper function to create text parts from content blocks
+function createTextPartFromBlock(part: Anthropic.ContentBlockParam): vscode.LanguageModelTextPart | null {
+	if (part.type === "image") {
+		return createImageTextPart(part)
+	}
+	if (part.type === "text") {
+		return new vscode.LanguageModelTextPart(part.text)
+	}
+	return null
+}
+
+/**
+ * Converts Anthropic message format to VSCode Language Model message format
+ */
 export function convertToVsCodeLmMessages(
 	anthropicMessages: Anthropic.Messages.MessageParam[],
 ): vscode.LanguageModelChatMessage[] {
@@ -55,7 +76,7 @@ export function convertToVsCodeLmMessages(
 						if (part.type === "tool_result") {
 							acc.toolMessages.push(part)
 						} else if (part.type === "text" || part.type === "image") {
-							acc.nonToolMessages.push(part)
+							acc.nonToolMessages.push(part as Anthropic.TextBlockParam | Anthropic.ImageBlockParam)
 						}
 						return acc
 					},
@@ -71,12 +92,8 @@ export function convertToVsCodeLmMessages(
 							typeof toolMessage.content === "string"
 								? [new vscode.LanguageModelTextPart(toolMessage.content)]
 								: (toolMessage.content?.map((part) => {
-										if (part.type === "image") {
-											return new vscode.LanguageModelTextPart(
-												`[Image (${part.source?.type || "Unknown source-type"}): ${part.source?.media_type || "unknown media-type"} not supported by VSCode LM API]`,
-											)
-										}
-										return new vscode.LanguageModelTextPart(part.text)
+										const textPart = createTextPartFromBlock(part)
+										return textPart ? textPart : new vscode.LanguageModelTextPart("")
 									}) ?? [new vscode.LanguageModelTextPart("")])
 
 						return new vscode.LanguageModelToolResultPart(toolMessage.tool_use_id, toolContentParts)
@@ -84,12 +101,8 @@ export function convertToVsCodeLmMessages(
 
 					// Convert non-tool messages to TextParts after tool messages
 					...nonToolMessages.map((part) => {
-						if (part.type === "image") {
-							return new vscode.LanguageModelTextPart(
-								`[Image (${part.source?.type || "Unknown source-type"}): ${part.source?.media_type || "unknown media-type"} not supported by VSCode LM API]`,
-							)
-						}
-						return new vscode.LanguageModelTextPart(part.text)
+						const textPart = createTextPartFromBlock(part)
+						return textPart ? textPart : new vscode.LanguageModelTextPart("")
 					}),
 				]
 
@@ -105,9 +118,9 @@ export function convertToVsCodeLmMessages(
 				}>(
 					(acc, part) => {
 						if (part.type === "tool_use") {
-							acc.toolMessages.push(part)
+							acc.toolMessages.push(part as Anthropic.ToolUseBlockParam)
 						} else if (part.type === "text" || part.type === "image") {
-							acc.nonToolMessages.push(part)
+							acc.nonToolMessages.push(part as Anthropic.TextBlockParam | Anthropic.ImageBlockParam)
 						}
 						return acc
 					},
@@ -128,10 +141,8 @@ export function convertToVsCodeLmMessages(
 
 					// Convert non-tool messages to TextParts after tool messages
 					...nonToolMessages.map((part) => {
-						if (part.type === "image") {
-							return new vscode.LanguageModelTextPart("[Image generation not supported by VSCode LM API]")
-						}
-						return new vscode.LanguageModelTextPart(part.text)
+						const textPart = createTextPartFromBlock(part)
+						return textPart ? textPart : new vscode.LanguageModelTextPart("")
 					}),
 				]
 
@@ -145,6 +156,9 @@ export function convertToVsCodeLmMessages(
 	return vsCodeLmMessages
 }
 
+/**
+ * Converts VSCode Language Model message role to Anthropic role
+ */
 export function convertToAnthropicRole(vsCodeLmMessageRole: vscode.LanguageModelChatMessageRole): string | null {
 	switch (vsCodeLmMessageRole) {
 		case vscode.LanguageModelChatMessageRole.Assistant:

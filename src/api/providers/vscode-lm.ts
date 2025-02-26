@@ -1,7 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import * as vscode from "vscode"
 import { ApiHandler, SingleCompletionHandler } from "../"
-import { calculateApiCost } from "../../utils/cost"
 import { ApiStream } from "../transform/stream"
 import { convertToVsCodeLmMessages } from "../transform/vscode-lm-format"
 import { SELECTOR_SEPARATOR, stringifyVsCodeLmModelSelector } from "../../shared/vsCodeSelectorUtils"
@@ -197,6 +196,52 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 
 		// Log directly to output channel
 		this.outputChannel.appendLine(formattedMessage)
+	}
+
+	/**
+	 * Log a detailed message with request/response information
+	 */
+	private logRequestDetails(stage: "start" | "progress" | "complete" | "error", details: Record<string, any>): void {
+		// Skip if debug output is disabled
+		if (!this.enableDebugOutput) {
+			return
+		}
+
+		// Add timestamp to message
+		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
+		const formattedMessage = `[${timestamp}] REQUEST ${stage.toUpperCase()}: ${JSON.stringify(details, null, 2)}`
+
+		// Log directly to output channel
+		this.outputChannel.appendLine(formattedMessage)
+	}
+
+	/**
+	 * Log performance metrics to the output channel
+	 */
+	private logPerformance(operation: string, startTime: number): void {
+		const endTime = Date.now()
+		const duration = endTime - startTime
+
+		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
+		const formattedMessage = `[${timestamp}] PERFORMANCE: ${operation} completed in ${duration}ms`
+
+		this.outputChannel.appendLine(formattedMessage)
+	}
+
+	/**
+	 * Log model selection information
+	 */
+	private logModelSelection(selectedModel: any, availableModels: any[]): void {
+		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
+
+		// Log the selected model
+		this.outputChannel.appendLine(
+			`[${timestamp}] MODEL SELECTION: Selected ${selectedModel.name || selectedModel.id}`,
+		)
+
+		// Log available models summary
+		const modelsSummary = availableModels.map((m) => `${m.name || m.id} (${m.vendor})`).join(", ")
+		this.outputChannel.appendLine(`[${timestamp}] AVAILABLE MODELS: ${modelsSummary}`)
 	}
 
 	/**
@@ -639,10 +684,19 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		this.logInfo("Starting new message creation")
 		this.log("System prompt length: " + systemPrompt.length)
 
+		const startTime = Date.now()
+
+		// Log request details
+		this.logRequestDetails("start", {
+			systemPromptLength: systemPrompt.length,
+			messagesCount: messages.length,
+			messageTypes: messages.map((m) => m.role),
+		})
+
 		const client: vscode.LanguageModelChat = await this.getClient()
 		this.logInfo(`Using client: ${client.name} (${client.id}) from ${client.vendor}`)
 
-		// Clean system prompt and messages
+		// Clean system prompt
 		const cleanedSystemPrompt = this.cleanTerminalOutput(systemPrompt)
 		this.log("System prompt cleaned")
 
@@ -650,48 +704,17 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		this.currentRequestCancellation = new vscode.CancellationTokenSource()
 
 		try {
-			// Convert messages to VS Code LM format
-			const vsCodeMessages: vscode.LanguageModelChatMessage[] = []
-
-			// Add system message
-			vsCodeMessages.push(
-				new vscode.LanguageModelChatMessage(vscode.LanguageModelChatMessageRole.User, [
-					new vscode.LanguageModelTextPart(cleanedSystemPrompt),
-				]),
-			)
-
-			// Add conversation messages
-			for (const message of messages) {
-				const role =
-					message.role === "user"
-						? vscode.LanguageModelChatMessageRole.User
-						: vscode.LanguageModelChatMessageRole.Assistant
-
-				// Handle different content types
-				if (typeof message.content === "string") {
-					vsCodeMessages.push(
-						new vscode.LanguageModelChatMessage(role, [
-							new vscode.LanguageModelTextPart(this.cleanTerminalOutput(message.content)),
-						]),
-					)
-				} else if (Array.isArray(message.content)) {
-					// Handle content arrays (text blocks, images, etc.)
-					const textParts = message.content
-						.filter((part) => part.type === "text")
-						.map((part) => (part as Anthropic.Messages.TextBlock).text)
-
-					if (textParts.length > 0) {
-						const combinedText = textParts.join("\n\n")
-						vsCodeMessages.push(
-							new vscode.LanguageModelChatMessage(role, [
-								new vscode.LanguageModelTextPart(this.cleanTerminalOutput(combinedText)),
-							]),
-						)
-					}
-
-					// Note: VS Code LM API doesn't support images yet, so we skip them
-				}
+			// Create a system message
+			const systemMessage: Anthropic.Messages.MessageParam = {
+				role: "user",
+				content: cleanedSystemPrompt,
 			}
+
+			// Combine system message with conversation messages
+			const allMessages = [systemMessage, ...messages]
+
+			// Convert all messages to VS Code LM format using the dedicated function
+			const vsCodeMessages = convertToVsCodeLmMessages(allMessages)
 
 			// Estimate token counts for logging
 			const estimatedTokens = await this.countTokens(
@@ -699,12 +722,19 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			)
 			this.log(`Estimated input tokens: ${estimatedTokens}`)
 
-			// Start the response stream
-			const responseStream = await client.sendRequest(vsCodeMessages, {
-				// The VS Code API expects a cancellation token to be passed differently
-				// Remove the token property and use the correct approach
-				// token: this.currentRequestCancellation.token, // This is incorrect
+			// Log progress
+			this.logRequestDetails("progress", {
+				estimatedInputTokens: estimatedTokens,
+				messagesConverted: true,
+				startingStream: true,
 			})
+
+			// Start the response stream
+			const responseStream = await client.sendRequest(
+				vsCodeMessages,
+				{}, // Empty options object
+				this.currentRequestCancellation.token, // Pass token as third parameter
+			)
 
 			let fullResponse = ""
 
@@ -717,11 +747,22 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 
 			// Process the stream
 			const chunks: string[] = []
+			let chunkCount = 0
 
 			// Process the stream
 			for await (const part of responseStream.stream) {
 				if (part instanceof vscode.LanguageModelTextPart) {
 					const chunk = part.value
+					chunkCount++
+
+					if (chunkCount % 10 === 0) {
+						this.logRequestDetails("progress", {
+							chunksReceived: chunkCount,
+							lastChunkPreview: chunk.substring(0, 20) + (chunk.length > 20 ? "..." : ""),
+							responseLength: fullResponse.length + chunk.length,
+						})
+					}
+
 					this.log(`Received chunk: ${chunk.substring(0, 50)}${chunk.length > 50 ? "..." : ""}`)
 
 					// Check for stop tokens
@@ -755,10 +796,22 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			const outputTokens = await this.countTokens(fullResponse)
 			this.log(`Final output tokens: ${outputTokens}`)
 
+			// Log completion details
+			this.logRequestDetails("complete", {
+				totalChunks: chunks.length,
+				outputTokens: outputTokens,
+				inputTokens: estimatedTokens,
+				responseLength: fullResponse.length,
+				durationMs: Date.now() - startTime,
+			})
+
+			// Log performance metrics
+			this.logPerformance("Message creation", startTime)
+
 			// Yield the final token usage
 			yield {
 				type: "usage",
-				inputTokens: 0,
+				inputTokens: estimatedTokens,
 				outputTokens: outputTokens,
 			}
 
@@ -766,6 +819,14 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			this.currentRequestCancellation = null
 		} catch (error) {
 			this.logError(`Error in createMessage: ${error instanceof Error ? error.message : "Unknown error"}`)
+
+			// Log detailed error information
+			this.logRequestDetails("error", {
+				error: error instanceof Error ? error.message : "Unknown error",
+				stack: error instanceof Error ? error.stack : undefined,
+				durationMs: Date.now() - startTime,
+			})
+
 			this.ensureCleanState()
 			throw error
 		} finally {
@@ -799,12 +860,20 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			}
 
 			// Log client properties for debugging
+			const clientProps: Record<string, any> = {}
 			for (const prop of ["id", "name", "vendor", "family", "version", "maxInputTokens"]) {
 				const value = (this.client as any)[prop]
+				clientProps[prop] = value
 				if (!value && value !== 0) {
 					this.log(`Warning: Client missing ${prop} property`)
 				}
 			}
+
+			// Log detailed client information
+			this.logRequestDetails("progress", {
+				operation: "getModel",
+				clientProperties: clientProps,
+			})
 
 			// Construct model ID using available information
 			const modelParts = [this.client.vendor, this.client.family, this.client.version].filter(Boolean)
@@ -829,6 +898,19 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 
 			this.log(`Generated model info with context window: ${modelInfo.contextWindow}`)
 
+			// Log detailed model information
+			this.outputChannel.appendLine(
+				JSON.stringify(
+					{
+						modelId,
+						modelInfo,
+						cacheKey,
+					},
+					null,
+					2,
+				),
+			)
+
 			// Cache the model info
 			const result = { id: modelId, info: modelInfo }
 			this.modelInfoCache.set(cacheKey, result)
@@ -842,6 +924,14 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			: "vscode-lm"
 
 		this.log(`No client available, using fallback ID: ${fallbackId}`)
+
+		// Log fallback information
+		this.logRequestDetails("progress", {
+			operation: "getModel",
+			status: "fallback",
+			fallbackId,
+			reason: "No client available",
+		})
 
 		const fallbackResult = {
 			id: fallbackId,
@@ -900,6 +990,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 */
 	async refreshModelCache(): Promise<vscode.LanguageModelChat> {
 		this.log("Explicitly refreshing model cache")
+		const startTime = Date.now()
 
 		// Clear the cached model
 		this.cachedModel = null
@@ -908,14 +999,36 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		// Get the current selector
 		const selector = this.options?.vsCodeLmModelSelector || {}
 
+		// Log refresh start
+		this.logRequestDetails("start", {
+			operation: "refreshModelCache",
+			selector: JSON.stringify(selector),
+		})
+
 		try {
 			// Get all available models
 			const availableModels = await this.getAvailableModels()
+
+			// Log available models
+			this.logRequestDetails("progress", {
+				operation: "refreshModelCache",
+				availableModelsCount: availableModels.length,
+				availableModels: availableModels.map((m) => ({
+					id: m.id,
+					name: m.name,
+					vendor: m.vendor,
+					family: m.family,
+					version: m.version,
+				})),
+			})
 
 			// Find the best matching model for the current selector
 			const bestMatch = await this.findBestMatchingModel(selector, availableModels)
 
 			if (bestMatch) {
+				// Log the selected model
+				this.logModelSelection(bestMatch, availableModels)
+
 				// Create a client with the best matching model
 				this.client = await this.createClient({
 					vendor: bestMatch.vendor,
@@ -925,6 +1038,24 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 				})
 
 				this.logInfo(`Using model: ${this.client.name} (${this.client.id}) from ${this.client.vendor}`)
+
+				// Log success
+				this.logRequestDetails("complete", {
+					operation: "refreshModelCache",
+					status: "success",
+					selectedModel: {
+						id: this.client.id,
+						name: this.client.name,
+						vendor: this.client.vendor,
+						family: this.client.family,
+						version: this.client.version,
+					},
+					durationMs: Date.now() - startTime,
+				})
+
+				// Log performance
+				this.logPerformance("Model cache refresh", startTime)
+
 				return this.client
 			}
 
@@ -944,9 +1075,25 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 					id: fallbackModel.id,
 				}
 
+				// Log fallback selection
+				this.logRequestDetails("progress", {
+					operation: "refreshModelCache",
+					status: "fallback",
+					reason: "No matching model",
+					fallbackModel: {
+						id: fallbackModel.id,
+						name: fallbackModel.name,
+						vendor: fallbackModel.vendor,
+					},
+				})
+
 				// Create new client with fallback selector
 				this.client = await this.createClient(fallbackSelector)
 				this.logInfo(`Using fallback model: ${this.client.name} (${this.client.id}) from ${this.client.vendor}`)
+
+				// Log performance
+				this.logPerformance("Model cache refresh (fallback)", startTime)
+
 				return this.client
 			}
 

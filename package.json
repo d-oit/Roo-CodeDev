@@ -269,6 +269,12 @@
 						}
 					},
 					"description": "Settings for VSCode Language Model API"
+				},
+				"roo-cline.debug.vscodelm": {
+					"type": "boolean",
+					"default": false,
+					"description": "Enable debug output for VS Code Language Model API in the output channel",
+					"scope": "window"
 				}
 			}
 		}

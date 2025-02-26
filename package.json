@@ -256,6 +256,11 @@
 					],
 					"description": "Commands that can be auto-executed when 'Always approve execute operations' is enabled"
 				},
+				"roo-cline.debug.vscode-lm": {
+					"type": "boolean",
+					"default": false,
+					"description": "Enable detailed debug output for VS Code Language Model integration"
+				},
 				"roo-cline.vsCodeLmModelSelector": {
 					"type": "object",
 					"properties": {
@@ -269,12 +274,6 @@
 						}
 					},
 					"description": "Settings for VSCode Language Model API"
-				},
-				"roo-cline.debug.vscodelm": {
-					"type": "boolean",
-					"default": false,
-					"description": "Enable debug output for VS Code Language Model API in the output channel",
-					"scope": "window"
 				}
 			}
 		}

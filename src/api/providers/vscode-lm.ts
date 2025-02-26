@@ -108,44 +108,38 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 * Log a message to the output channel with debouncing
 	 */
 	private log(message: string): void {
-		// Skip logging if debug output is disabled
-		if (!this.enableDebugOutput) {
-			return
-		}
+		if (!this.enableDebugOutput) return
 
-		// Add to queue
 		this.logQueue.push(message)
 
-		// Process immediately if queue is getting large
+		// If we've reached the batch size, flush immediately
 		if (this.logQueue.length >= this.LOG_BATCH_SIZE) {
 			this.flushLogs()
 			return
 		}
 
-		// Otherwise debounce
-		if (this.logTimeout) {
-			clearTimeout(this.logTimeout)
+		// Otherwise, set up a debounced flush
+		if (!this.logTimeout) {
+			this.logTimeout = setTimeout(() => {
+				this.flushLogs()
+			}, this.LOG_DEBOUNCE_MS)
 		}
-
-		this.logTimeout = setTimeout(() => {
-			this.flushLogs()
-		}, this.LOG_DEBOUNCE_MS)
 	}
 
 	/**
-	 * Flush logs to the output channel
+	 * Flush queued logs to the output channel
 	 */
 	private flushLogs(): void {
-		if (this.logQueue.length === 0) return
-
-		// Process each message through logDebug
-		for (const message of this.logQueue) {
-			this.logDebug(message)
+		if (this.logQueue.length === 0) {
+			return
 		}
 
-		// Clear queue
-		this.logQueue = []
+		// Join all queued messages with newlines and append to output channel
+		const message = this.logQueue.join("\n")
+		this.outputChannel.appendLine(message)
 
+		// Clear the queue and timeout
+		this.logQueue = []
 		if (this.logTimeout) {
 			clearTimeout(this.logTimeout)
 			this.logTimeout = null
@@ -206,54 +200,56 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	}
 
 	/**
-	 * Creates a client with the given model selector, using cache when possible
+	 * Creates a new VS Code Language Model client with the specified selector
 	 */
-	async createClient(selector: vscode.LanguageModelChatSelector): Promise<vscode.LanguageModelChat> {
-		this.logInfo(`Creating client with selector: ${JSON.stringify(selector)}`)
-
+	private async createClient(selector: vscode.LanguageModelChatSelector): Promise<vscode.LanguageModelChat> {
 		try {
-			// Check if we can use the cached model
-			if (
-				this.cachedModel &&
-				this.cachedModelSelector &&
-				this.areSelectorsEqual(selector, this.cachedModelSelector)
-			) {
-				// Verify the cached model is still available
-				const availableModels = await vscode.lm.selectChatModels({})
-				const modelStillAvailable = availableModels.some(
-					(model) =>
-						model.id === this.cachedModel?.id &&
-						model.vendor === this.cachedModel?.vendor &&
-						model.family === this.cachedModel?.family,
-				)
+			// Get all available models
+			const availableModels = await this.getAvailableModels()
+			this.logInfo(`Found ${availableModels.length} available models`)
 
-				if (modelStillAvailable) {
-					this.logInfo(`Using cached model: ${this.cachedModel.name} (${this.cachedModel.id})`)
-					return this.cachedModel
-				} else {
-					this.logInfo(`Cached model ${this.cachedModel.id} is no longer available, selecting new model`)
-					// Clear cache since model is no longer available
-					this.cachedModel = null
-					this.cachedModelSelector = null
-				}
+			// Log detailed information about all available models
+			this.logInfo("=== Available Models Information ===")
+			for (const model of availableModels) {
+				this.logInfo(`Model: ${model.name} (${model.id})`)
+				this.logInfo(`  Vendor: ${model.vendor}`)
+				this.logInfo(`  Family: ${model.family}`)
 			}
 
-			// If no cache or selector changed, get new models
-			this.logInfo(`Selecting new models with selector: ${JSON.stringify(selector)}`)
-			const models = await vscode.lm.selectChatModels(selector)
+			// Find the best matching model
+			const bestMatch = await this.findBestMatchingModel(selector, availableModels)
 
-			this.logInfo(`Found ${models.length} matching models`)
+			// If a matching model is found, use it
+			if (bestMatch) {
+				// Get the actual model instance from VS Code API
+				const models = await vscode.lm.selectChatModels({
+					vendor: bestMatch.vendor,
+					family: bestMatch.family,
+					version: bestMatch.version,
+					id: bestMatch.id,
+				})
 
-			// Use first available model or create a minimal model object
-			if (models && Array.isArray(models) && models.length > 0) {
-				const model = models[0]
-				this.logInfo(`Selected model: ${model.name} (${model.id}) from ${model.vendor}`)
+				if (models && Array.isArray(models) && models.length > 0) {
+					const model = models[0]
+					this.logInfo(`Selected model: ${model.name} (${model.id}) from ${model.vendor}`)
 
-				// Cache the model and selector
-				this.cachedModel = model
-				this.cachedModelSelector = { ...selector }
+					// Log the maxInputTokens for the selected model
+					try {
+						const capabilities = await this.getModelCapabilities(model)
+						this.logInfo(`Selected model max input tokens: ${capabilities.maxInputTokens || "Unknown"}`)
+						this.logInfo(`Selected model max output tokens: ${capabilities.maxOutputTokens || "Unknown"}`)
+					} catch (error) {
+						this.logInfo(
+							`Failed to get selected model capabilities: ${error instanceof Error ? error.message : "Unknown error"}`,
+						)
+					}
 
-				return model
+					// Cache the model and selector
+					this.cachedModel = model
+					this.cachedModelSelector = { ...selector }
+
+					return model
+				}
 			}
 
 			this.logInfo("No matching models found, using default model")
@@ -460,38 +456,50 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		}
 	}
 
+	/**
+	 * Gets or creates a VS Code Language Model client
+	 */
 	private async getClient(): Promise<vscode.LanguageModelChat> {
-		// Get the selector from options
-		const selector = this.options?.vsCodeLmModelSelector || {}
-
 		try {
-			// Check if we need to create a new client
-			if (!this.client) {
-				this.log("Client not initialized, creating new client")
-				this.client = await this.createClient(selector)
+			// If we already have a client, return it
+			if (this.client) {
+				// Log the maxInputTokens for the existing client
+				try {
+					const capabilities = await this.getModelCapabilities(this.client)
+					this.log(`Using existing client with max input tokens: ${capabilities.maxInputTokens || "Unknown"}`)
+				} catch (error) {
+					this.log(
+						`Failed to get existing client capabilities: ${error instanceof Error ? error.message : "Unknown error"}`,
+					)
+				}
+
 				return this.client
 			}
 
-			// Check if the model selector has changed
-			if (this.cachedModelSelector && !this.areSelectorsEqual(selector, this.cachedModelSelector)) {
-				this.log("Model selector changed, creating new client")
-				this.log(`Previous: ${JSON.stringify(this.cachedModelSelector)}`)
-				this.log(`New: ${JSON.stringify(selector)}`)
+			// Get the model selector from options
+			const selector = this.options.vsCodeLmModelSelector
+			if (!selector) {
+				throw new Error("VS Code LM model selector not provided in options")
+			}
 
-				// Clean up existing client if needed
-				this.ensureCleanState()
+			// Create a new client
+			this.client = await this.createClient(selector)
 
-				// Create new client with updated selector
-				this.client = await this.createClient(selector)
-			} else {
-				this.log(`Using existing client: ${this.client.name} (${this.client.id})`)
+			// Log the maxInputTokens for the new client
+			try {
+				const capabilities = await this.getModelCapabilities(this.client)
+				this.logInfo(`New client created with max input tokens: ${capabilities.maxInputTokens || "Unknown"}`)
+			} catch (error) {
+				this.logInfo(
+					`Failed to get new client capabilities: ${error instanceof Error ? error.message : "Unknown error"}`,
+				)
 			}
 
 			return this.client
 		} catch (error) {
-			const message = error instanceof Error ? error.message : "Unknown error"
-			this.log(`Client creation failed: ${message}`)
-			throw new Error(`Roo Code <Language Model API>: Failed to create client: ${message}`)
+			const errorMessage = error instanceof Error ? error.message : "Unknown error"
+			this.logError(`Failed to get client: ${errorMessage}`)
+			throw new Error(`Roo Code <Language Model API>: Failed to get client: ${errorMessage}`)
 		}
 	}
 
@@ -634,145 +642,129 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		const cleanedSystemPrompt = this.cleanTerminalOutput(systemPrompt)
 		this.log("System prompt cleaned")
 
-		const cleanedMessages = messages.map((msg) => ({
-			...msg,
-			content: this.cleanMessageContent(msg.content),
-		}))
-		this.log(`Cleaned ${cleanedMessages.length} messages`)
-
-		// Convert Anthropic messages to VS Code LM messages
-		const vsCodeLmMessages: vscode.LanguageModelChatMessage[] = [
-			vscode.LanguageModelChatMessage.Assistant(cleanedSystemPrompt),
-			...convertToVsCodeLmMessages(cleanedMessages),
-		]
-		this.log(`Converted ${vsCodeLmMessages.length} messages for VS Code LM API`)
-
-		// Initialize cancellation token for the request
+		// Create a cancellation token source for this request
 		this.currentRequestCancellation = new vscode.CancellationTokenSource()
 
-		// Calculate input tokens before starting the stream
-		const totalInputTokens: number = await this.calculateTotalInputTokens(systemPrompt, vsCodeLmMessages)
-		this.logInfo(`Total input tokens: ${totalInputTokens}`)
-
-		// Accumulate the text and count at the end of the stream to reduce token counting overhead.
-		let accumulatedText: string = ""
-
 		try {
-			// Create the response stream with minimal required options
-			const requestOptions: vscode.LanguageModelChatRequestOptions = {
-				justification: `Roo Code would like to use '${client.name}' from '${client.vendor}', Click 'Allow' to proceed.`,
-			}
+			// Convert messages to VS Code LM format
+			const vsCodeMessages: vscode.LanguageModelChatMessage[] = []
 
-			this.logInfo("Sending request to VS Code LM API")
-
-			// Note: Tool support is currently provided by the VSCode Language Model API directly
-			// Extensions can register tools using vscode.lm.registerTool()
-
-			const response: vscode.LanguageModelChatResponse = await client.sendRequest(
-				vsCodeLmMessages,
-				requestOptions,
-				this.currentRequestCancellation.token,
+			// Add system message
+			vsCodeMessages.push(
+				new vscode.LanguageModelChatMessage(vscode.LanguageModelChatMessageRole.User, [
+					new vscode.LanguageModelTextPart(cleanedSystemPrompt),
+				]),
 			)
 
-			this.logInfo("Received response, processing stream")
+			// Add conversation messages
+			for (const message of messages) {
+				const role =
+					message.role === "user"
+						? vscode.LanguageModelChatMessageRole.User
+						: vscode.LanguageModelChatMessageRole.Assistant
 
-			// Consume the stream and handle both text and tool call chunks
-			for await (const chunk of response.stream) {
-				if (chunk instanceof vscode.LanguageModelTextPart) {
-					// Validate text part value
-					if (typeof chunk.value !== "string") {
-						this.logError("Invalid text part value received: " + JSON.stringify(chunk.value))
-						continue
+				// Handle different content types
+				if (typeof message.content === "string") {
+					vsCodeMessages.push(
+						new vscode.LanguageModelChatMessage(role, [
+							new vscode.LanguageModelTextPart(this.cleanTerminalOutput(message.content)),
+						]),
+					)
+				} else if (Array.isArray(message.content)) {
+					// Handle content arrays (text blocks, images, etc.)
+					const textParts = message.content
+						.filter((part) => part.type === "text")
+						.map((part) => (part as Anthropic.Messages.TextBlock).text)
+
+					if (textParts.length > 0) {
+						const combinedText = textParts.join("\n\n")
+						vsCodeMessages.push(
+							new vscode.LanguageModelChatMessage(role, [
+								new vscode.LanguageModelTextPart(this.cleanTerminalOutput(combinedText)),
+							]),
+						)
 					}
 
-					accumulatedText += chunk.value
-					yield {
-						type: "text",
-						text: chunk.value,
-					}
-				} else if (chunk instanceof vscode.LanguageModelToolCallPart) {
-					try {
-						// Validate tool call parameters
-						if (!chunk.name || typeof chunk.name !== "string") {
-							this.logError("Invalid tool name received: " + JSON.stringify(chunk.name))
-							continue
-						}
-
-						if (!chunk.callId || typeof chunk.callId !== "string") {
-							this.logError("Invalid tool callId received: " + JSON.stringify(chunk.callId))
-							continue
-						}
-
-						// Ensure input is a valid object
-						if (!chunk.input || typeof chunk.input !== "object") {
-							this.logError("Invalid tool input received: " + JSON.stringify(chunk.input))
-							continue
-						}
-
-						// Convert tool calls to text format with proper error handling
-						const toolCall = {
-							type: "tool_call",
-							name: chunk.name,
-							arguments: chunk.input,
-							callId: chunk.callId,
-						}
-
-						const toolCallText = JSON.stringify(toolCall)
-						accumulatedText += toolCallText
-
-						// Log tool call for debugging
-						this.log("Processing tool call: " + chunk.name)
-
-						yield {
-							type: "text",
-							text: toolCallText,
-						}
-					} catch (error) {
-						this.logError("Failed to process tool call: " + error)
-						// Continue processing other chunks even if one fails
-						continue
-					}
-				} else {
-					this.logError("Unknown chunk type received: " + JSON.stringify(chunk))
+					// Note: VS Code LM API doesn't support images yet, so we skip them
 				}
 			}
 
-			// Count tokens in the accumulated text after stream completion
-			const totalOutputTokens: number = await this.countTokens(accumulatedText)
-			this.logInfo(`Response complete. Output tokens: ${totalOutputTokens}`)
+			// Estimate token counts for logging
+			const estimatedTokens = await this.countTokens(
+				cleanedSystemPrompt + messages.map((m) => (typeof m.content === "string" ? m.content : "")).join(" "),
+			)
+			this.log(`Estimated input tokens: ${estimatedTokens}`)
 
-			// Report final usage after stream completion
+			// Start the response stream
+			const responseStream = await client.sendRequest(vsCodeMessages, {
+				token: this.currentRequestCancellation.token,
+			})
+
+			let fullResponse = ""
+
+			// First, yield usage information
 			yield {
 				type: "usage",
-				inputTokens: totalInputTokens,
-				outputTokens: totalOutputTokens,
-				totalCost: calculateApiCost(this.getModel().info, totalInputTokens, totalOutputTokens),
+				inputTokens: estimatedTokens,
+				outputTokens: 0, // Will be updated as we receive chunks
 			}
-		} catch (error: unknown) {
+
+			// Process the stream
+			const chunks: string[] = []
+
+			// Process the stream
+			for await (const part of responseStream.stream) {
+				if (part instanceof vscode.LanguageModelTextPart) {
+					const chunk = part.value
+					this.log(`Received chunk: ${chunk.substring(0, 50)}${chunk.length > 50 ? "..." : ""}`)
+
+					// Check for stop tokens
+					if (this.hasStopToken(chunk)) {
+						this.log("Stop token detected, ending stream")
+						// Remove the stop token from the content
+						const stopTokens = ["<|end|>", "<|im_end|>", "<|endoftext|>"]
+						const cleanedContent = stopTokens.reduce(
+							(text: string, token: string) => text.replace(token, ""),
+							chunk,
+						)
+						chunks.push(cleanedContent)
+						fullResponse += cleanedContent
+						break
+					}
+
+					chunks.push(chunk)
+					fullResponse += chunk
+				}
+			}
+
+			// Now yield all the chunks
+			for (const chunk of chunks) {
+				yield {
+					type: "text",
+					text: chunk,
+				}
+			}
+
+			// Final token count for the complete response
+			const outputTokens = await this.countTokens(fullResponse)
+			this.log(`Final output tokens: ${outputTokens}`)
+
+			// Yield the final token usage
+			yield {
+				type: "usage",
+				inputTokens: 0,
+				outputTokens: outputTokens,
+			}
+
+			// Clear the request state
+			this.currentRequestCancellation = null
+		} catch (error) {
+			this.logError(`Error in createMessage: ${error instanceof Error ? error.message : "Unknown error"}`)
 			this.ensureCleanState()
-
-			if (error instanceof vscode.CancellationError) {
-				this.logInfo("Request cancelled by user")
-				throw new Error("Roo Code <Language Model API>: Request cancelled by user")
-			}
-
-			if (error instanceof Error) {
-				this.logError(`Stream error: ${error.message}`)
-				this.log(`Error stack: ${error.stack}`)
-
-				// Return original error if it's already an Error instance
-				throw error
-			} else if (typeof error === "object" && error !== null) {
-				// Handle error-like objects
-				const errorDetails = JSON.stringify(error, null, 2)
-				this.logError(`Stream error object: ${errorDetails}`)
-				throw new Error(`Roo Code <Language Model API>: Response stream error: ${errorDetails}`)
-			} else {
-				// Fallback for unknown error types
-				const errorMessage = String(error)
-				this.logError(`Unknown stream error: ${errorMessage}`)
-				throw new Error(`Roo Code <Language Model API>: Response stream error: ${errorMessage}`)
-			}
+			throw error
+		} finally {
+			// Ensure logs are flushed
+			this.flushLogs()
 		}
 	}
 
@@ -911,43 +903,55 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		const selector = this.options?.vsCodeLmModelSelector || {}
 
 		try {
-			// Check if the requested model is available
-			const isModelAvailable = await this.isModelAvailable(selector)
+			// Get all available models
+			const availableModels = await this.getAvailableModels()
 
-			if (!isModelAvailable) {
-				this.logWarning(`Requested model with selector ${JSON.stringify(selector)} is not available`)
+			// Find the best matching model for the current selector
+			const bestMatch = await this.findBestMatchingModel(selector, availableModels)
 
-				// Try to find any available model as fallback
-				const anyAvailableModels = await vscode.lm.selectChatModels({})
+			if (bestMatch) {
+				// Create a client with the best matching model
+				this.client = await this.createClient({
+					vendor: bestMatch.vendor,
+					family: bestMatch.family,
+					version: bestMatch.version,
+					id: bestMatch.id,
+				})
 
-				if (anyAvailableModels && anyAvailableModels.length > 0) {
-					this.logInfo(`Found alternative model: ${anyAvailableModels[0].name}`)
-
-					// Update the selector to use the first available model
-					const fallbackSelector = {
-						vendor: anyAvailableModels[0].vendor,
-						family: anyAvailableModels[0].family,
-					}
-
-					// Create new client with fallback selector
-					this.client = await this.createClient(fallbackSelector)
-					this.logInfo(
-						`Using fallback model: ${this.client.name} (${this.client.id}) from ${this.client.vendor}`,
-					)
-					return this.client
-				}
+				this.logInfo(`Using model: ${this.client.name} (${this.client.id}) from ${this.client.vendor}`)
+				return this.client
 			}
 
-			// Force a new client creation with the original selector
-			this.client = await this.createClient(selector)
-			this.logInfo(`Refreshed model: ${this.client.name} (${this.client.id}) from ${this.client.vendor}`)
+			// If no matching model found, try to find any available model as fallback
+			if (availableModels.length > 0) {
+				this.logInfo(`No model matching selector ${JSON.stringify(selector)}, using alternative model`)
 
+				// Use the first available model
+				const fallbackModel = availableModels[0]
+				this.logInfo(`Found alternative model: ${fallbackModel.name}`)
+
+				// Update the selector to use the first available model
+				const fallbackSelector = {
+					vendor: fallbackModel.vendor,
+					family: fallbackModel.family,
+					version: fallbackModel.version,
+					id: fallbackModel.id,
+				}
+
+				// Create new client with fallback selector
+				this.client = await this.createClient(fallbackSelector)
+				this.logInfo(`Using fallback model: ${this.client.name} (${this.client.id}) from ${this.client.vendor}`)
+				return this.client
+			}
+
+			// Force a new client creation with the original selector if no alternatives found
+			this.client = await this.createClient(selector)
 			return this.client
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error"
 			this.logError(`Failed to refresh model cache: ${errorMessage}`)
 
-			// Create a default client as fallback
+			// Try to create a client with empty selector as last resort
 			this.client = await this.createClient({})
 			return this.client
 		}
@@ -994,8 +998,24 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 */
 	async isModelAvailable(selector: vscode.LanguageModelChatSelector): Promise<boolean> {
 		try {
-			const models = await vscode.lm.selectChatModels(selector)
-			return models && Array.isArray(models) && models.length > 0
+			// Get all available models first
+			const availableModels = await this.getAvailableModels()
+
+			// If no selector is provided, return true if any models are available
+			if (!selector || Object.keys(selector).length === 0) {
+				return availableModels.length > 0
+			}
+
+			// Check if any model matches the selector criteria
+			return availableModels.some((model) => {
+				// Match based on provided selector properties
+				const vendorMatch = !selector.vendor || model.vendor === selector.vendor
+				const familyMatch = !selector.family || model.family === selector.family
+				const versionMatch = !selector.version || model.version === selector.version
+				const idMatch = !selector.id || model.id === selector.id
+
+				return vendorMatch && familyMatch && versionMatch && idMatch
+			})
 		} catch (error) {
 			this.logError(
 				`Error checking model availability: ${error instanceof Error ? error.message : "Unknown error"}`,
@@ -1067,5 +1087,215 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			clearInterval(this.modelCheckInterval)
 			this.modelCheckInterval = undefined
 		}
+	}
+
+	/**
+	 * Finds the best matching model based on the selector
+	 * @param selector The model selector criteria
+	 * @param availableModels Optional list of available models (to avoid redundant API calls)
+	 * @returns The best matching model or null if no match found
+	 */
+	private async findBestMatchingModel(
+		selector: vscode.LanguageModelChatSelector,
+		availableModels?: Array<{
+			id: string
+			name: string
+			vendor: string
+			family: string
+			version?: string
+		}>,
+	): Promise<{
+		id: string
+		name: string
+		vendor: string
+		family: string
+		version?: string
+	} | null> {
+		try {
+			// Get available models if not provided
+			const models = availableModels || (await this.getAvailableModels())
+
+			if (models.length === 0) {
+				this.logInfo("No models available")
+				return null
+			}
+
+			// If no selector is provided, return the first available model
+			if (!selector || Object.keys(selector).length === 0) {
+				this.logInfo(`No selector provided, using first available model: ${models[0].name}`)
+				return models[0]
+			}
+
+			// Filter models based on selector criteria
+			const matchingModels = models.filter((model) => {
+				const vendorMatch = !selector.vendor || model.vendor === selector.vendor
+				const familyMatch = !selector.family || model.family === selector.family
+				const versionMatch = !selector.version || model.version === selector.version
+				const idMatch = !selector.id || model.id === selector.id
+
+				return vendorMatch && familyMatch && versionMatch && idMatch
+			})
+
+			if (matchingModels.length === 0) {
+				this.logInfo(`No models match selector: ${JSON.stringify(selector)}`)
+				return null
+			}
+
+			// Return the first matching model
+			this.logInfo(`Found ${matchingModels.length} matching models, using: ${matchingModels[0].name}`)
+			return matchingModels[0]
+		} catch (error) {
+			this.logError(
+				`Error finding best matching model: ${error instanceof Error ? error.message : "Unknown error"}`,
+			)
+			return null
+		}
+	}
+
+	/**
+	 * Suggests alternative models when the requested model is not available
+	 * @param selector The original model selector
+	 * @returns Array of suggested alternative models
+	 */
+	async suggestAlternativeModels(selector: vscode.LanguageModelChatSelector): Promise<
+		Array<{
+			id: string
+			name: string
+			vendor: string
+			family: string
+			version?: string
+			score: number // Higher score means better match
+		}>
+	> {
+		try {
+			const availableModels = await this.getAvailableModels()
+
+			if (availableModels.length === 0) {
+				return []
+			}
+
+			// Score each model based on how well it matches the selector
+			return (
+				availableModels
+					.map((model) => {
+						let score = 0
+
+						// Award points for matching properties
+						if (selector.vendor && model.vendor === selector.vendor) score += 3
+						if (selector.family && model.family === selector.family) score += 2
+						if (selector.version && model.version === selector.version) score += 1
+						if (selector.id && model.id === selector.id) score += 4
+
+						return {
+							...model,
+							score,
+						}
+					})
+					// Sort by score (descending)
+					.sort((a, b) => b.score - a.score)
+					// Take top 3 suggestions
+					.slice(0, 3)
+			)
+		} catch (error) {
+			this.logError(
+				`Error suggesting alternative models: ${error instanceof Error ? error.message : "Unknown error"}`,
+			)
+			return []
+		}
+	}
+
+	/**
+	 * Check if the response contains a stop token
+	 * @param text The text to check for stop tokens
+	 * @returns True if a stop token is found
+	 */
+	private hasStopToken(text: string): boolean {
+		// Common stop tokens
+		const stopTokens = ["<|end|>", "<|im_end|>", "<|endoftext|>"]
+		return stopTokens.some((token) => text.includes(token))
+	}
+
+	/**
+	 * Process streaming response and check for completion
+	 * @param stream The response stream
+	 * @param onChunk Callback for each chunk
+	 */
+	private async processStream(
+		stream: AsyncIterableIterator<vscode.LanguageModelChatMessage>,
+		onChunk: (chunk: string) => void,
+	): Promise<void> {
+		try {
+			for await (const message of stream) {
+				for (const part of message.content) {
+					if (part instanceof vscode.LanguageModelTextPart) {
+						const content = part.text
+
+						// Log the chunk for debugging
+						this.log(`Received chunk: ${content.substring(0, 50)}${content.length > 50 ? "..." : ""}`)
+
+						// Check for stop tokens
+						if (this.hasStopToken(content)) {
+							this.log("Stop token detected, ending stream")
+							// Remove the stop token from the content
+							const stopTokens = ["<|end|>", "<|im_end|>", "<|endoftext|>"]
+							const cleanedContent = stopTokens.reduce(
+								(text: string, token: string) => text.replace(token, ""),
+								content,
+							)
+							onChunk(cleanedContent)
+							break
+						}
+
+						onChunk(content)
+					}
+				}
+			}
+		} catch (error) {
+			this.logError(`Stream processing error: ${error instanceof Error ? error.message : "Unknown error"}`)
+			throw error
+		} finally {
+			this.log("Stream processing completed")
+		}
+	}
+
+	/**
+	 * Get model capabilities including maxInputTokens
+	 * @param model The language model to check
+	 * @returns Object containing model capabilities
+	 */
+	private async getModelCapabilities(model: vscode.LanguageModelChat): Promise<{
+		maxInputTokens?: number
+		maxOutputTokens?: number
+		supportsImages?: boolean
+		supportsTools?: boolean
+	}> {
+		try {
+			return {
+				maxInputTokens: model.maxInputTokens,
+				maxOutputTokens: undefined, // VS Code API doesn't expose this directly
+				supportsImages: false, // Default value, could be determined based on model properties
+				supportsTools: false, // Default value, could be determined based on model properties
+			}
+		} catch (error) {
+			this.logError(
+				`Failed to get model capabilities: ${error instanceof Error ? error.message : "Unknown error"}`,
+			)
+			return {}
+		}
+	}
+
+	/**
+	 * Count tokens in a string
+	 * @param text The text to count tokens for
+	 * @returns Estimated token count
+	 */
+	private async countTokens(text: string): Promise<number> {
+		// Simple estimation - can be replaced with a more accurate method
+		if (!text) {
+			return 0
+		}
+
+		// Rough estimation: 1 token ≈ 4 characters for English text
+		return Math.ceil(text.length / 4)
 	}
 }

@@ -261,6 +261,11 @@
 					"default": false,
 					"description": "Enable detailed debug output for VS Code Language Model integration"
 				},
+				"roo-cline.debug.vscode-lm-conversation": {
+					"type": "boolean",
+					"default": false,
+					"description": "Log complete conversations with VS Code Language Model"
+				},
 				"roo-cline.vsCodeLmModelSelector": {
 					"type": "object",
 					"properties": {

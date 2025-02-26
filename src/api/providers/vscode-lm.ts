@@ -3,7 +3,7 @@ import * as vscode from "vscode"
 import { ApiHandler, SingleCompletionHandler } from "../"
 import { ApiStream } from "../transform/stream"
 import { convertToVsCodeLmMessages } from "../transform/vscode-lm-format"
-import { SELECTOR_SEPARATOR, stringifyVsCodeLmModelSelector } from "../../shared/vsCodeSelectorUtils"
+import { SELECTOR_SEPARATOR } from "../../shared/vsCodeSelectorUtils"
 import { ApiHandlerOptions, ModelInfo, openAiModelInfoSaneDefaults } from "../../shared/api"
 
 /**
@@ -38,12 +38,13 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	private client: vscode.LanguageModelChat | null
 	private disposable: vscode.Disposable | null
 	private currentRequestCancellation: vscode.CancellationTokenSource | null
-	private outputChannel: vscode.OutputChannel
+	private outputChannel!: vscode.OutputChannel
 	private cachedModelSelector: vscode.LanguageModelChatSelector | null = null
 	private cachedModel: vscode.LanguageModelChat | null = null
 	private static sharedOutputChannel: vscode.OutputChannel | undefined
 	private enableDebugOutput: boolean = false
 	private modelCheckInterval: NodeJS.Timeout | undefined
+	private logConversations: boolean = false
 
 	/**
 	 * Optimized logging with debouncing
@@ -70,7 +71,6 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	/**
 	 * Constants for model handling
 	 */
-	private readonly SELECTOR_SEPARATOR = "/"
 	private readonly openAiModelInfoSaneDefaults: ModelInfo = {
 		maxTokens: 4096,
 		contextWindow: 8192,
@@ -90,15 +90,20 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		// Get debug configuration
 		const config = vscode.workspace.getConfiguration("roo-cline")
 		this.enableDebugOutput = config.get<boolean>("debug.vscode-lm", false)
+		this.logConversations = config.get<boolean>("debug.vscode-lm-conversation", false)
 
-		// Use shared output channel if it exists, otherwise create a new one
-		if (!VsCodeLmHandler.sharedOutputChannel) {
-			VsCodeLmHandler.sharedOutputChannel = vscode.window.createOutputChannel("Roo Code VS Code LM")
+		// Only create and use the output channel if debugging or conversation logging is enabled
+		if (this.enableDebugOutput || this.logConversations) {
+			// Use shared output channel if it exists, otherwise create a new one
+			if (!VsCodeLmHandler.sharedOutputChannel) {
+				VsCodeLmHandler.sharedOutputChannel = vscode.window.createOutputChannel("Roo Code VS Code LM")
+			}
+			this.outputChannel = VsCodeLmHandler.sharedOutputChannel
+
+			this.logInfo("VS Code LM Handler initialized")
+			this.logInfo(`Debug output ${this.enableDebugOutput ? "enabled" : "disabled"}`)
+			this.logInfo(`Conversation logging ${this.logConversations ? "enabled" : "disabled"}`)
 		}
-		this.outputChannel = VsCodeLmHandler.sharedOutputChannel
-
-		this.logInfo("VS Code LM Handler initialized")
-		this.logInfo(`Debug output ${this.enableDebugOutput ? "enabled" : "disabled"}`)
 
 		try {
 			// Listen for model changes and reset client
@@ -107,18 +112,46 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 					try {
 						this.client = null
 						this.ensureCleanState()
-						this.logInfo("Configuration changed, client reset")
+						if (this.enableDebugOutput || this.logConversations) {
+							this.logInfo("Configuration changed, client reset")
+						}
 					} catch (error) {
 						console.error("Error during configuration change cleanup:", error)
-						this.logError(`Error during configuration change cleanup: ${error}`)
+						if (this.enableDebugOutput || this.logConversations) {
+							this.logError(`Error during configuration change cleanup: ${error}`)
+						}
 					}
 				}
 
-				// Update debug setting if it changes
-				if (event.affectsConfiguration("roo-cline.debug.vscode-lm")) {
+				// Update debug settings if they change
+				if (
+					event.affectsConfiguration("roo-cline.debug.vscode-lm") ||
+					event.affectsConfiguration("roo-cline.debug.vscode-lm-conversation")
+				) {
 					const config = vscode.workspace.getConfiguration("roo-cline")
+					const previousDebugEnabled = this.enableDebugOutput
+					const previousConversationLoggingEnabled = this.logConversations
+
 					this.enableDebugOutput = config.get<boolean>("debug.vscode-lm", false)
-					this.logInfo(`Debug output ${this.enableDebugOutput ? "enabled" : "disabled"}`)
+					this.logConversations = config.get<boolean>("debug.vscode-lm-conversation", false)
+
+					// Create output channel if it doesn't exist and either debug option is now enabled
+					if (
+						(this.enableDebugOutput || this.logConversations) &&
+						!previousDebugEnabled &&
+						!previousConversationLoggingEnabled
+					) {
+						if (!VsCodeLmHandler.sharedOutputChannel) {
+							VsCodeLmHandler.sharedOutputChannel =
+								vscode.window.createOutputChannel("Roo Code VS Code LM")
+						}
+						this.outputChannel = VsCodeLmHandler.sharedOutputChannel
+					}
+
+					if (this.enableDebugOutput || this.logConversations) {
+						this.logInfo(`Debug output ${this.enableDebugOutput ? "enabled" : "disabled"}`)
+						this.logInfo(`Conversation logging ${this.logConversations ? "enabled" : "disabled"}`)
+					}
 				}
 			})
 		} catch (error) {
@@ -126,7 +159,9 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			this.dispose()
 
 			const errorMessage = `Failed to initialize handler: ${error instanceof Error ? error.message : "Unknown error"}`
-			this.logError(errorMessage)
+			if (this.enableDebugOutput || this.logConversations) {
+				this.logError(errorMessage)
+			}
 			throw new Error(`Roo Code <Language Model API>: ${errorMessage}`)
 		}
 	}
@@ -135,7 +170,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 * Log a message to the output channel with debouncing
 	 */
 	private log(message: string): void {
-		if (!this.enableDebugOutput) return
+		if (!this.enableDebugOutput || !this.outputChannel) return
 
 		this.logQueue.push(message)
 
@@ -157,7 +192,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 * Flush queued logs to the output channel
 	 */
 	private flushLogs(): void {
-		if (this.logQueue.length === 0) {
+		if (this.logQueue.length === 0 || !this.outputChannel) {
 			return
 		}
 
@@ -177,6 +212,8 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 * Log an informational message to the output channel (always logged)
 	 */
 	private logInfo(message: string): void {
+		if (!this.outputChannel) return
+
 		// Add timestamp to message
 		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
 		const formattedMessage = `[${timestamp}] INFO: ${message}`
@@ -189,6 +226,8 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 * Log an error message to the output channel (always logged)
 	 */
 	private logError(message: string): void {
+		if (!this.outputChannel) return
+
 		// Add timestamp to message
 		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
 		const formattedMessage = `[${timestamp}] ERROR: ${message}`
@@ -201,8 +240,8 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 * Log a debug message to the output channel (only when debug is enabled)
 	 */
 	private logDebug(message: string): void {
-		// Skip logging if debug output is disabled
-		if (!this.enableDebugOutput) {
+		// Skip logging if debug output is disabled or output channel doesn't exist
+		if (!this.enableDebugOutput || !this.outputChannel) {
 			return
 		}
 
@@ -218,6 +257,8 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 * Log a warning message to the output channel (always logged)
 	 */
 	private logWarning(message: string): void {
+		if (!this.outputChannel) return
+
 		// Add timestamp to message
 		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
 		const formattedMessage = `[${timestamp}] WARNING: ${message}`
@@ -230,8 +271,8 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 * Log a detailed message with request/response information
 	 */
 	private logRequestDetails(stage: "start" | "progress" | "complete" | "error", details: Record<string, any>): void {
-		// Skip if debug output is disabled
-		if (!this.enableDebugOutput) {
+		// Skip if debug output is disabled or output channel doesn't exist
+		if (!this.enableDebugOutput || !this.outputChannel) {
 			return
 		}
 
@@ -247,6 +288,8 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 * Log performance metrics to the output channel
 	 */
 	private logPerformance(operation: string, startTime: number): void {
+		if (!this.outputChannel) return
+
 		const endTime = Date.now()
 		const duration = endTime - startTime
 
@@ -260,6 +303,8 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 * Log model selection information
 	 */
 	private logModelSelection(selectedModel: any, availableModels: any[]): void {
+		if (!this.outputChannel) return
+
 		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
 
 		// Log the selected model
@@ -763,6 +808,57 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			// Convert all messages to VS Code LM format using the dedicated function
 			const vsCodeMessages = convertToVsCodeLmMessages(allMessages)
 
+			// Log the complete messages to the output channel
+			this.logInfo("=== COMPLETE CONVERSATION ===")
+			for (const msg of vsCodeMessages) {
+				// Convert the role enum to a string representation
+				const roleString = vscode.LanguageModelChatMessageRole[msg.role] || String(msg.role)
+				this.logInfo(`--- ${roleString.toUpperCase()} MESSAGE ---`)
+
+				if (typeof msg.content === "string") {
+					this.logInfo(msg.content)
+				} else if (Array.isArray(msg.content)) {
+					for (const part of msg.content) {
+						if (part instanceof vscode.LanguageModelTextPart) {
+							this.logInfo(`[TEXT]: ${part.value}`)
+						} else if (part instanceof vscode.LanguageModelToolCallPart) {
+							this.logInfo(`[TOOL CALL]: ${part.name} (ID: ${part.callId})`)
+							this.logInfo(`Input: ${JSON.stringify(part.input, null, 2)}`)
+						} else if (part instanceof vscode.LanguageModelToolResultPart) {
+							// Use safe property access with optional chaining
+							const id = (part as any).toolCallId || (part as any).toolUseId || "unknown"
+							this.logInfo(`[TOOL RESULT]: (ID: ${id})`)
+
+							try {
+								// Log the complete part for debugging
+								this.logInfo(`Tool result part structure: ${JSON.stringify(Object.keys(part))}`)
+
+								// Try different property access patterns
+								if (typeof part.content === "string") {
+									this.logInfo(`  Result content: ${part.content}`)
+								} else if (Array.isArray(part.content)) {
+									for (const contentPart of part.content) {
+										if (contentPart instanceof vscode.LanguageModelTextPart) {
+											this.logInfo(`  Result text: ${contentPart.value}`)
+										} else {
+											this.logInfo(`  Unknown content part: ${JSON.stringify(contentPart)}`)
+										}
+									}
+								} else {
+									this.logInfo(`  Result: ${JSON.stringify(part)}`)
+								}
+							} catch (error) {
+								this.logInfo(`Error accessing tool result properties: ${error}`)
+								this.logInfo(`Full tool result part: ${JSON.stringify(part)}`)
+							}
+						} else {
+							this.logInfo(`[UNKNOWN PART]: ${JSON.stringify(part)}`)
+						}
+					}
+				}
+			}
+			this.logInfo("=== END CONVERSATION ===")
+
 			// Estimate token counts for logging
 			const estimatedTokens = await this.countTokens(
 				cleanedSystemPrompt + messages.map((m) => (typeof m.content === "string" ? m.content : "")).join(" "),
@@ -783,63 +879,30 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 				this.currentRequestCancellation.token, // Pass token as third parameter
 			)
 
+			// Process the response stream
 			let fullResponse = ""
-
-			// First, yield usage information
-			yield {
-				type: "usage",
-				inputTokens: estimatedTokens,
-				outputTokens: 0, // Will be updated as we receive chunks
-			}
-
-			// Process the stream
 			const chunks: string[] = []
-			let chunkCount = 0
 
-			// Process the stream
 			for await (const part of responseStream.stream) {
 				if (part instanceof vscode.LanguageModelTextPart) {
-					const chunk = part.value
-					chunkCount++
+					const content = part.value
+					chunks.push(content)
+					fullResponse += content
 
-					if (chunkCount % 10 === 0) {
-						this.logRequestDetails("progress", {
-							chunksReceived: chunkCount,
-							lastChunkPreview: chunk.substring(0, 20) + (chunk.length > 20 ? "..." : ""),
-							responseLength: fullResponse.length + chunk.length,
-						})
+					// Yield the text chunk
+					yield {
+						type: "text",
+						text: content,
 					}
-
-					this.log(`Received chunk: ${chunk.substring(0, 50)}${chunk.length > 50 ? "..." : ""}`)
-
-					// Check for stop tokens
-					if (this.hasStopToken(chunk)) {
-						this.log("Stop token detected, ending stream")
-						// Remove the stop token from the content
-						const stopTokens = ["<|end|>", "<|im_end|>", "<|endoftext|>"]
-						const cleanedContent = stopTokens.reduce(
-							(text: string, token: string) => text.replace(token, ""),
-							chunk,
-						)
-						chunks.push(cleanedContent)
-						fullResponse += cleanedContent
-						break
-					}
-
-					chunks.push(chunk)
-					fullResponse += chunk
 				}
 			}
 
-			// Now yield all the chunks
-			for (const chunk of chunks) {
-				yield {
-					type: "text",
-					text: chunk,
-				}
-			}
+			// Log the complete response
+			this.logInfo("=== COMPLETE RESPONSE ===")
+			this.logInfo(fullResponse)
+			this.logInfo("=== END RESPONSE ===")
 
-			// Final token count for the complete response
+			// Count output tokens
 			const outputTokens = await this.countTokens(fullResponse)
 			this.log(`Final output tokens: ${outputTokens}`)
 
@@ -893,9 +956,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			// Generate a cache key based on client properties
 			const cacheKey =
 				this.client.id ||
-				[this.client.vendor, this.client.family, this.client.version]
-					.filter(Boolean)
-					.join(this.SELECTOR_SEPARATOR)
+				[this.client.vendor, this.client.family, this.client.version].filter(Boolean).join(SELECTOR_SEPARATOR)
 
 			// Check if we have cached info for this model
 			if (this.modelInfoCache.has(cacheKey)) {
@@ -925,7 +986,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			const modelParts = [this.client.vendor, this.client.family, this.client.version].filter(Boolean)
 			this.log(`Model parts: ${modelParts.join(", ")}`)
 
-			const modelId = this.client.id || modelParts.join(this.SELECTOR_SEPARATOR)
+			const modelId = this.client.id || modelParts.join(SELECTOR_SEPARATOR)
 			this.log(`Using model ID: ${modelId}`)
 
 			// Build model info with conservative defaults for missing values
@@ -934,7 +995,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 				contextWindow:
 					typeof this.client.maxInputTokens === "number"
 						? Math.max(0, this.client.maxInputTokens)
-						: this.openAiModelInfoSaneDefaults.contextWindow,
+						: openAiModelInfoSaneDefaults.contextWindow,
 				supportsImages: false,
 				supportsPromptCache: true,
 				inputPrice: 0,
@@ -986,7 +1047,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		const fallbackResult = {
 			id: fallbackId,
 			info: {
-				...this.openAiModelInfoSaneDefaults,
+				...openAiModelInfoSaneDefaults,
 				description: `VSCode Language Model (Fallback): ${fallbackId}`,
 			},
 		}
@@ -1519,7 +1580,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		if (selector.version) parts.push(`version:${selector.version}`)
 		if (selector.id) parts.push(`id:${selector.id}`)
 
-		return parts.length > 0 ? parts.join(this.SELECTOR_SEPARATOR) : "vscode-lm-default"
+		return parts.length > 0 ? parts.join(SELECTOR_SEPARATOR) : "vscode-lm-default"
 	}
 
 	/**

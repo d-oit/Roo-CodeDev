@@ -154,7 +154,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			if (this.enableDebugOutput || this.logConversations) {
 				this.logError(errorMessage)
 			}
-			throw new Error(`Roo Code <Language Model API>: ${errorMessage}`)
+			throw new Error(`Roo Code Language Model API: ${errorMessage}`)
 		}
 	}
 
@@ -349,9 +349,20 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 						this.logInfo(`Selected model max input tokens: ${capabilities.maxInputTokens || "Unknown"}`)
 						this.logInfo(`Selected model max output tokens: ${capabilities.maxOutputTokens || "Unknown"}`)
 					} catch (error) {
-						this.logInfo(
-							`Failed to get selected model capabilities: ${error instanceof Error ? error.message : "Unknown error"}`,
-						)
+						const errorMessage = `Failed to get selected model capabilities: ${error instanceof Error ? error.message : "Unknown error"}`
+						this.logError(errorMessage)
+
+						// Include additional details if available
+						const details =
+							error instanceof Error
+								? {
+										name: error.name,
+										stack: error.stack,
+										cause: error.cause,
+									}
+								: {}
+
+						throw new Error(`Roo Code Language Model API: ${errorMessage}`, { cause: details })
 					}
 
 					// Cache the model and selector
@@ -399,7 +410,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error"
 			this.logError(`Failed to select model: ${errorMessage}`)
-			throw new Error(`Roo Code <Language Model API>: Failed to select model: ${errorMessage}`)
+			throw new Error(`Roo Code Language Model API: Failed to select model: ${errorMessage}`)
 		}
 	}
 
@@ -1245,7 +1256,7 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		this.log(`Error in ${context}: ${errorMessage}${errorDetails}`)
 
 		// Return a standardized error
-		return new Error(`Roo Code <Language Model API>: ${context} - ${errorMessage}`)
+		return new Error(`Roo Code Language Model API: ${context} - ${errorMessage}`)
 	}
 
 	/**
@@ -1606,5 +1617,58 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 
 		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
 		this.outputChannel.appendLine(`[${timestamp}] CONVERSATION [${role}]: ${content}`)
+	}
+
+	private async getDetailedModelInfo(model: vscode.LanguageModelChat): Promise<ModelInfo> {
+		this.logInfo(`Getting detailed model info for ${model.name || model.id || "unknown model"}`)
+
+		// Get basic capabilities
+		const capabilities = await this.getModelCapabilities(model)
+		this.logDebug(`Model capabilities: ${JSON.stringify(capabilities)}`)
+
+		// Construct model info
+		const modelInfo: ModelInfo = {
+			maxTokens: capabilities.maxOutputTokens ?? -1,
+			contextWindow: capabilities.maxInputTokens ?? 8192,
+			supportsImages: capabilities.supportsImages || false,
+			supportsComputerUse: capabilities.supportsTools || false,
+			supportsPromptCache: false,
+			description: `${model.name || "VS Code Language Model"} (${model.id || "Unknown ID"})`,
+			inputPrice: undefined,
+			outputPrice: undefined,
+		}
+
+		this.logDebug(`Generated model info: ${JSON.stringify(modelInfo)}`)
+
+		// Generate cache key
+		const cacheKey =
+			model.id || [model.vendor, model.family, model.version].filter(Boolean).join(SELECTOR_SEPARATOR)
+
+		// Update cache
+		this.modelInfoCache.set(cacheKey, { id: cacheKey, info: modelInfo })
+		this.modelInfoCacheAccessTimes.set(cacheKey, Date.now())
+
+		// Maintain cache size
+		this.maintainModelCacheSize()
+
+		return modelInfo
+	}
+
+	public async refreshModelInfo(): Promise<{ id: string; info: ModelInfo }> {
+		this.log("Refreshing model information")
+
+		const client = await this.getClient()
+		if (!client) {
+			throw new Error("No language model client available")
+		}
+
+		// Get detailed model info
+		const modelInfo = await this.getDetailedModelInfo(client)
+
+		// Construct model ID
+		const modelId =
+			client.id || [client.vendor, client.family, client.version].filter(Boolean).join(SELECTOR_SEPARATOR)
+
+		return { id: modelId, info: modelInfo }
 	}
 }

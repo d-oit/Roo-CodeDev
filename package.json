@@ -238,50 +238,57 @@
 				}
 			]
 		},
-		"configuration": {
-			"title": "Roo Code",
-			"properties": {
-				"roo-cline.allowedCommands": {
-					"type": "array",
-					"items": {
-						"type": "string"
-					},
-					"default": [
-						"npm test",
-						"npm install",
-						"tsc",
-						"git log",
-						"git diff",
-						"git show"
-					],
-					"description": "Commands that can be auto-executed when 'Always approve execute operations' is enabled"
-				},
-				"roo-cline.debug.vscode-lm": {
-					"type": "boolean",
-					"default": false,
-					"description": "Enable detailed debug output for VS Code Language Model integration"
-				},
-				"roo-cline.debug.vscode-lm-conversation": {
-					"type": "boolean",
-					"default": false,
-					"description": "Log complete conversations with VS Code Language Model"
-				},
-				"roo-cline.vsCodeLmModelSelector": {
-					"type": "object",
-					"properties": {
-						"vendor": {
-							"type": "string",
-							"description": "The vendor of the language model (e.g. copilot)"
+		"configuration": [
+			{
+				"title": "Roo Code",
+				"properties": {
+					"roo-cline.allowedCommands": {
+						"type": "array",
+						"items": {
+							"type": "string"
 						},
-						"family": {
-							"type": "string",
-							"description": "The family of the language model (e.g. gpt-4)"
-						}
+						"default": [
+							"npm test",
+							"npm install",
+							"tsc",
+							"git log",
+							"git diff",
+							"git show"
+						],
+						"description": "Commands that can be auto-executed when 'Always approve execute operations' is enabled"
 					},
-					"description": "Settings for VSCode Language Model API"
+					"roo-cline.vsCodeLmModelSelector": {
+						"type": "object",
+						"properties": {
+							"vendor": {
+								"type": "string",
+								"description": "The vendor of the language model (e.g. copilot)"
+							},
+							"family": {
+								"type": "string",
+								"description": "The family of the language model (e.g. gpt-4)"
+							}
+						},
+						"description": "Settings for VSCode Language Model API"
+					}
+				}
+			},
+			{
+				"title": "Debug",
+				"properties": {
+					"roo-cline.debug.vscode-lm": {
+						"type": "boolean",
+						"default": false,
+						"description": "Enable detailed debug output for VS Code Language Model integration"
+					},
+					"roo-cline.debug.vscode-lm-conversation": {
+						"type": "boolean",
+						"default": false,
+						"description": "Log complete conversations with VS Code Language Model"
+					}
 				}
 			}
-		}
+		]
 	},
 	"scripts": {
 		"build": "npm run build:webview && npm run vsix",

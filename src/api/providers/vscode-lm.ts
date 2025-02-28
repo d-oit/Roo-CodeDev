@@ -75,9 +75,9 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		this.currentRequestCancellation = null
 
 		// Get debug configuration
-		const config = vscode.workspace.getConfiguration("roo-cline")
-		this.enableDebugOutput = config.get<boolean>("debug.vscode-lm", false)
-		this.logConversations = config.get<boolean>("debug.vscode-lm-conversation", false)
+		const debugConfig = vscode.workspace.getConfiguration("roo-cline.debug")
+		this.enableDebugOutput = debugConfig.get<boolean>("vscode-lm", false)
+		this.logConversations = debugConfig.get<boolean>("vscode-lm-conversation", false)
 
 		// Only create and use the output channel if debugging or conversation logging is enabled
 		if (this.enableDebugOutput || this.logConversations) {
@@ -120,12 +120,12 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 					event.affectsConfiguration("roo-cline.debug.vscode-lm") ||
 					event.affectsConfiguration("roo-cline.debug.vscode-lm-conversation")
 				) {
-					const config = vscode.workspace.getConfiguration("roo-cline")
+					const debugConfig = vscode.workspace.getConfiguration("roo-cline.debug")
 					const previousDebugEnabled = this.enableDebugOutput
 					const previousConversationLoggingEnabled = this.logConversations
 
-					this.enableDebugOutput = config.get<boolean>("debug.vscode-lm", false)
-					this.logConversations = config.get<boolean>("debug.vscode-lm-conversation", false)
+					this.enableDebugOutput = debugConfig.get<boolean>("vscode-lm", false)
+					this.logConversations = debugConfig.get<boolean>("vscode-lm-conversation", false)
 
 					// Create output channel if it doesn't exist and either debug option is now enabled
 					if (

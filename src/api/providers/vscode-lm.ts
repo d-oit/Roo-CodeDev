@@ -68,19 +68,6 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	private modelInfoCacheAccessTimes: Map<string, number> = new Map()
 	private readonly MODEL_CACHE_MAX_SIZE = 20 // Reasonable limit for model cache
 
-	/**
-	 * Constants for model handling
-	 */
-	private readonly openAiModelInfoSaneDefaults: ModelInfo = {
-		maxTokens: 4096,
-		contextWindow: 8192,
-		supportsImages: false,
-		supportsPromptCache: true,
-		inputPrice: 0,
-		outputPrice: 0,
-		description: "VSCode Language Model",
-	}
-
 	constructor(options: ApiHandlerOptions) {
 		this.options = options
 		this.client = null
@@ -103,6 +90,11 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			this.logInfo("VS Code LM Handler initialized")
 			this.logInfo(`Debug output ${this.enableDebugOutput ? "enabled" : "disabled"}`)
 			this.logInfo(`Conversation logging ${this.logConversations ? "enabled" : "disabled"}`)
+
+			// Add this verification log
+			if (this.logConversations) {
+				this.logInfo("Conversation logging is active - messages will be logged to output channel")
+			}
 		}
 
 		try {
@@ -774,7 +766,11 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		// Ensure clean state before starting a new request
 		this.ensureCleanState()
 		this.logInfo("Starting new message creation")
-		this.log("System prompt length: " + systemPrompt.length)
+
+		// Log system prompt if conversation logging is enabled
+		if (this.logConversations) {
+			this.logConversationMessage("system", systemPrompt)
+		}
 
 		const startTime = Date.now()
 
@@ -860,10 +856,8 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			this.logInfo("=== END CONVERSATION ===")
 
 			// Estimate token counts for logging
-			const estimatedTokens = await this.countTokens(
-				cleanedSystemPrompt + messages.map((m) => (typeof m.content === "string" ? m.content : "")).join(" "),
-			)
-			this.log(`Estimated input tokens: ${estimatedTokens}`)
+			const estimatedTokens = await this.calculateTotalInputTokens(cleanedSystemPrompt, vsCodeMessages)
+			this.log(`Calculated input tokens: ${estimatedTokens}`)
 
 			// Log progress
 			this.logRequestDetails("progress", {
@@ -1602,5 +1596,15 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 
 			this.log(`Removed ${keysToRemove.length} oldest entries from model info cache`)
 		}
+	}
+
+	/**
+	 * Add a dedicated method for conversation logging
+	 */
+	private logConversationMessage(role: string, content: string): void {
+		if (!this.logConversations || !this.outputChannel) return
+
+		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
+		this.outputChannel.appendLine(`[${timestamp}] CONVERSATION [${role}]: ${content}`)
 	}
 }

@@ -1495,39 +1495,73 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		stream: AsyncIterableIterator<vscode.LanguageModelChatMessage>,
 		onChunk: (chunk: string) => void,
 	): Promise<void> {
+		let processedChunks = 0
+		const startTime = Date.now()
+
 		try {
 			for await (const message of stream) {
+				// Check if stream has been cancelled or timed out
+				if (this.currentRequestCancellation?.token.isCancellationRequested) {
+					this.logInfo("Stream processing cancelled by user")
+					throw new vscode.CancellationError()
+				}
+
 				for (const part of message.content) {
 					if (part instanceof vscode.LanguageModelTextPart) {
-						// Use the correct property to access the text content
-						// In newer VS Code API, it might be 'value' instead of 'text'
 						const content = part.value
+						processedChunks++
 
 						// Log the chunk for debugging
-						this.log(`Received chunk: ${content.substring(0, 50)}${content.length > 50 ? "..." : ""}`)
+						this.log(
+							`Received chunk ${processedChunks}: ${content.substring(0, 50)}${content.length > 50 ? "..." : ""}`,
+						)
 
-						// Check for stop tokens
-						if (this.hasStopToken(content)) {
-							this.log("Stop token detected, ending stream")
-							// Remove the stop token from the content
-							const stopTokens = ["<|end|>", "<|im_end|>", "<|endoftext|>"]
-							const cleanedContent = stopTokens.reduce(
-								(text: string, token: string) => text.replace(token, ""),
-								content,
+						try {
+							// Check for stop tokens
+							if (this.hasStopToken(content)) {
+								this.log("Stop token detected, ending stream")
+								// Remove the stop token from the content
+								const stopTokens = ["<|end|>", "<|im_end|>", "<|endoftext|>"]
+								const cleanedContent = stopTokens.reduce(
+									(text: string, token: string) => text.replace(token, ""),
+									content,
+								)
+								onChunk(cleanedContent)
+								break
+							}
+
+							onChunk(content)
+						} catch (chunkError) {
+							this.logError(
+								`Error processing chunk ${processedChunks}: ${chunkError instanceof Error ? chunkError.message : "Unknown error"}`,
 							)
-							onChunk(cleanedContent)
-							break
+							throw chunkError
 						}
-
-						onChunk(content)
 					}
 				}
 			}
 		} catch (error) {
-			this.logError(`Stream processing error: ${error instanceof Error ? error.message : "Unknown error"}`)
-			throw error
+			if (error instanceof vscode.CancellationError) {
+				this.logInfo("Stream processing cancelled")
+				throw error
+			}
+
+			const errorMessage = error instanceof Error ? error.message : "Unknown error"
+			this.logError(`Stream processing error: ${errorMessage}`)
+
+			// Log detailed error information
+			this.logRequestDetails("stream_error", {
+				error: errorMessage,
+				stack: error instanceof Error ? error.stack : undefined,
+				processedChunks,
+				durationMs: Date.now() - startTime,
+			})
+
+			// Rethrow with more context
+			throw new Error(`VS Code LM stream processing failed: ${errorMessage}`)
 		} finally {
-			this.log("Stream processing completed")
+			this.log(`Stream processing completed. Processed ${processedChunks} chunks in ${Date.now() - startTime}ms`)
+			this.flushLogs()
 		}
 	}
 

@@ -173,11 +173,13 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		}
 
 		// Otherwise, set up a debounced flush
-		if (!this.logTimeout) {
-			this.logTimeout = setTimeout(() => {
-				this.flushLogs()
-			}, this.LOG_DEBOUNCE_MS)
+		if (this.logTimeout) {
+			clearTimeout(this.logTimeout)
 		}
+
+		this.logTimeout = setTimeout(() => {
+			this.flushLogs()
+		}, this.LOG_DEBOUNCE_MS)
 	}
 
 	/**
@@ -204,14 +206,14 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 * Log an informational message to the output channel (always logged)
 	 */
 	private logInfo(message: string): void {
-		if (!this.outputChannel) return
+		if (!this.logConversations || !this.outputChannel) return
 
 		// Add timestamp to message
 		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
 		const formattedMessage = `[${timestamp}] INFO: ${message}`
 
-		// Log directly to output channel
-		this.outputChannel.appendLine(formattedMessage)
+		// Use the log queue system instead of direct output
+		this.log(formattedMessage)
 	}
 
 	/**
@@ -224,25 +226,22 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
 		const formattedMessage = `[${timestamp}] ERROR: ${message}`
 
-		// Log directly to output channel
-		this.outputChannel.appendLine(formattedMessage)
+		// Use the log queue system instead of direct output
+		this.log(formattedMessage)
 	}
 
 	/**
 	 * Log a debug message to the output channel (only when debug is enabled)
 	 */
 	private logDebug(message: string): void {
-		// Skip logging if debug output is disabled or output channel doesn't exist
-		if (!this.enableDebugOutput || !this.outputChannel) {
-			return
-		}
+		if (!this.enableDebugOutput || !this.outputChannel) return
 
 		// Add timestamp to message
 		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
 		const formattedMessage = `[${timestamp}] DEBUG: ${message}`
 
-		// Log directly to output channel
-		this.outputChannel.appendLine(formattedMessage)
+		// Use the log queue system instead of direct output
+		this.log(formattedMessage)
 	}
 
 	/**
@@ -255,25 +254,44 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
 		const formattedMessage = `[${timestamp}] WARNING: ${message}`
 
-		// Log directly to output channel
-		this.outputChannel.appendLine(formattedMessage)
+		// Use the log queue system instead of direct output
+		this.log(formattedMessage)
 	}
 
 	/**
 	 * Log a detailed message with request/response information
 	 */
-	private logRequestDetails(stage: "start" | "progress" | "complete" | "error", details: Record<string, any>): void {
-		// Skip if debug output is disabled or output channel doesn't exist
-		if (!this.enableDebugOutput || !this.outputChannel) {
-			return
+	private getMessageTypesSummary(messageTypes: string[]): Record<string, number> {
+		return messageTypes.reduce(
+			(acc, type) => {
+				acc[type] = (acc[type] || 0) + 1
+				return acc
+			},
+			{} as Record<string, number>,
+		)
+	}
+
+	private logRequestDetails(
+		stage: "start" | "progress" | "complete" | "error" | "stream_error",
+		details: Record<string, any>,
+	): void {
+		if (!this.enableDebugOutput || !this.outputChannel) return
+
+		// If details include messageTypes, convert to summary
+		if (details.messageTypes) {
+			details = {
+				...details,
+				messageTypeCounts: this.getMessageTypesSummary(details.messageTypes),
+				messageTypes: undefined, // Remove the full array
+			}
 		}
 
 		// Add timestamp to message
 		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
 		const formattedMessage = `[${timestamp}] REQUEST ${stage.toUpperCase()}: ${JSON.stringify(details, null, 2)}`
 
-		// Log directly to output channel
-		this.outputChannel.appendLine(formattedMessage)
+		// Use the log queue system instead of direct output
+		this.log(formattedMessage)
 	}
 
 	/**
@@ -776,28 +794,35 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	async *createMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream {
 		// Ensure clean state before starting a new request
 		this.ensureCleanState()
-		this.logInfo("Starting new message creation")
 
-		// Log system prompt if conversation logging is enabled
+		// Only log if conversation logging is enabled
 		if (this.logConversations) {
+			this.logInfo("Starting new message creation")
 			this.logConversationMessage("system", systemPrompt)
 		}
 
 		const startTime = Date.now()
 
-		// Log request details
-		this.logRequestDetails("start", {
-			systemPromptLength: systemPrompt.length,
-			messagesCount: messages.length,
-			messageTypes: messages.map((m) => m.role),
-		})
+		// Only log request details if debug is enabled
+		if (this.enableDebugOutput) {
+			this.logRequestDetails("start", {
+				systemPromptLength: systemPrompt.length,
+				messagesCount: messages.length,
+				messageTypes: messages.map((m) => m.role),
+			})
+		}
 
 		const client: vscode.LanguageModelChat = await this.getClient()
-		this.logInfo(`Using client: ${client.name} (${client.id}) from ${client.vendor}`)
+
+		if (this.logConversations) {
+			this.logInfo(`Using client: ${client.name} (${client.id}) from ${client.vendor}`)
+		}
 
 		// Clean system prompt
 		const cleanedSystemPrompt = this.cleanTerminalOutput(systemPrompt)
-		this.log("System prompt cleaned")
+		if (this.enableDebugOutput) {
+			this.log("System prompt cleaned")
+		}
 
 		// Create a cancellation token source for this request
 		this.currentRequestCancellation = new vscode.CancellationTokenSource()
@@ -815,56 +840,30 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			// Convert all messages to VS Code LM format using the dedicated function
 			const vsCodeMessages = convertToVsCodeLmMessages(allMessages)
 
-			// Log the complete messages to the output channel
-			this.logInfo("=== COMPLETE CONVERSATION ===")
-			for (const msg of vsCodeMessages) {
-				// Convert the role enum to a string representation
-				const roleString = vscode.LanguageModelChatMessageRole[msg.role] || String(msg.role)
-				this.logInfo(`--- ${roleString.toUpperCase()} MESSAGE ---`)
+			// Only log complete conversation if conversation logging is enabled
+			if (this.logConversations) {
+				this.logInfo("=== COMPLETE CONVERSATION ===")
+				for (const msg of vsCodeMessages) {
+					const roleString = vscode.LanguageModelChatMessageRole[msg.role] || String(msg.role)
+					this.logInfo(`--- ${roleString.toUpperCase()} MESSAGE ---`)
 
-				if (typeof msg.content === "string") {
-					this.logInfo(msg.content)
-				} else if (Array.isArray(msg.content)) {
-					for (const part of msg.content) {
-						if (part instanceof vscode.LanguageModelTextPart) {
-							this.logInfo(`[TEXT]: ${part.value}`)
-						} else if (part instanceof vscode.LanguageModelToolCallPart) {
-							this.logInfo(`[TOOL CALL]: ${part.name} (ID: ${part.callId})`)
-							this.logInfo(`Input: ${JSON.stringify(part.input, null, 2)}`)
-						} else if (part instanceof vscode.LanguageModelToolResultPart) {
-							// Use safe property access with optional chaining
-							const id = (part as any).toolCallId || (part as any).toolUseId || "unknown"
-							this.logInfo(`[TOOL RESULT]: (ID: ${id})`)
-
-							try {
-								// Log the complete part for debugging
-								this.logInfo(`Tool result part structure: ${JSON.stringify(Object.keys(part))}`)
-
-								// Try different property access patterns
-								if (typeof part.content === "string") {
-									this.logInfo(`  Result content: ${part.content}`)
-								} else if (Array.isArray(part.content)) {
-									for (const contentPart of part.content) {
-										if (contentPart instanceof vscode.LanguageModelTextPart) {
-											this.logInfo(`  Result text: ${contentPart.value}`)
-										} else {
-											this.logInfo(`  Unknown content part: ${JSON.stringify(contentPart)}`)
-										}
-									}
-								} else {
-									this.logInfo(`  Result: ${JSON.stringify(part)}`)
-								}
-							} catch (error) {
-								this.logInfo(`Error accessing tool result properties: ${error}`)
-								this.logInfo(`Full tool result part: ${JSON.stringify(part)}`)
+					if (typeof msg.content === "string") {
+						this.logInfo(msg.content)
+					} else if (Array.isArray(msg.content)) {
+						for (const part of msg.content) {
+							if (part instanceof vscode.LanguageModelTextPart) {
+								this.logInfo(`[TEXT]: ${part.value}`)
+							} else if (part instanceof vscode.LanguageModelToolCallPart) {
+								this.logInfo(`[TOOL CALL]: ${part.name} (ID: ${part.callId})`)
+								this.logInfo(`Input: ${JSON.stringify(part.input, null, 2)}`)
+							} else if (part instanceof vscode.LanguageModelToolResultPart) {
+								const id = (part as any).toolCallId || (part as any).toolUseId || "unknown"
+								this.logInfo(`[TOOL RESULT]: (ID: ${id})`)
 							}
-						} else {
-							this.logInfo(`[UNKNOWN PART]: ${JSON.stringify(part)}`)
 						}
 					}
 				}
 			}
-			this.logInfo("=== END CONVERSATION ===")
 
 			// Estimate token counts for logging
 			const estimatedTokens = await this.calculateTotalInputTokens(cleanedSystemPrompt, vsCodeMessages)
@@ -1650,7 +1649,10 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		if (!this.logConversations || !this.outputChannel) return
 
 		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
-		this.outputChannel.appendLine(`[${timestamp}] CONVERSATION [${role}]: ${content}`)
+		const formattedMessage = `[${timestamp}] CONVERSATION [${role}]: ${content}`
+
+		// Use the log queue system instead of direct output
+		this.log(formattedMessage)
 	}
 
 	private async getDetailedModelInfo(model: vscode.LanguageModelChat): Promise<ModelInfo> {

@@ -617,25 +617,27 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 	 */
 	private async getClient(): Promise<vscode.LanguageModelChat> {
 		try {
-			// If we have a cached client and it exactly matches the current selector, use it
+			// Add detailed cache debugging
+			if (!this.cachedModel) {
+				this.logInfo("Cache miss: No cached model exists")
+			} else if (!this.cachedModelSelector) {
+				this.logInfo("Cache miss: No cached model selector exists")
+			} else if (!this.options.vsCodeLmModelSelector) {
+				this.logInfo("Cache miss: No current model selector specified")
+			} else if (!this.areSelectorsEqual(this.cachedModelSelector, this.options.vsCodeLmModelSelector)) {
+				this.logInfo(`Cache miss: Selector mismatch
+					Cached: ${JSON.stringify(this.cachedModelSelector)}
+					Current: ${JSON.stringify(this.options.vsCodeLmModelSelector)}`)
+			}
+
+			// Existing cache check
 			if (
 				this.cachedModel &&
 				this.cachedModelSelector &&
 				this.options.vsCodeLmModelSelector &&
 				this.areSelectorsEqual(this.cachedModelSelector, this.options.vsCodeLmModelSelector)
 			) {
-				this.logInfo("Using cached client (exact selector match)")
-				return this.cachedModel
-			}
-
-			// If we have a cached client and it partially matches the current selector, use it
-			if (
-				this.cachedModel &&
-				this.cachedModelSelector &&
-				this.options.vsCodeLmModelSelector &&
-				this.areSelectorsPartialMatch(this.cachedModelSelector, this.options.vsCodeLmModelSelector)
-			) {
-				this.logInfo("Using cached client (partial selector match)")
+				this.logInfo("Cache hit: Using cached client (exact selector match)")
 				return this.cachedModel
 			}
 
@@ -643,25 +645,47 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 			const selector = this.options.vsCodeLmModelSelector || {}
 			this.logInfo(`Getting client with selector: ${JSON.stringify(selector)}`)
 
-			// Cache the selector for future comparisons
-			this.cachedModelSelector = { ...selector }
+			// Get available models
+			const availableModels = await this.getAvailableModels()
 
-			// Create a new client
-			this.client = await this.createClient(selector)
-
-			// Log the maxInputTokens for the new client
-			try {
-				const capabilities = await this.getModelCapabilities(this.client)
-				this.logInfo(`New client created with max input tokens: ${capabilities.maxInputTokens || "Unknown"}`)
-			} catch (error) {
-				this.logInfo(
-					`Failed to get new client capabilities: ${error instanceof Error ? error.message : "Unknown error"}`,
-				)
+			if (availableModels.length === 0) {
+				throw new Error("No available models found")
 			}
 
-			return this.client
+			// Find best matching model
+			const bestMatch = await this.findBestMatchingModel(selector, availableModels)
+
+			if (!bestMatch) {
+				throw new Error(`No model matching selector: ${JSON.stringify(selector)}`)
+			}
+
+			// Create new client
+			const client = await this.createClient({
+				vendor: bestMatch.vendor,
+				family: bestMatch.family,
+				version: bestMatch.version,
+				id: bestMatch.id,
+			})
+
+			// Cache the client and selector
+			this.cachedModel = client
+			this.cachedModelSelector = { ...selector }
+
+			this.logInfo(`Created and cached new client: ${client.name} (${client.id})`)
+			return client
 		} catch (error) {
-			throw this.handleError(error, "Get client")
+			const errorMessage = error instanceof Error ? error.message : "Unknown error"
+			this.logError(`Failed to get client: ${errorMessage}`)
+
+			// Try to create a default client as fallback
+			try {
+				const defaultClient = await this.createClient({})
+				this.cachedModel = defaultClient
+				this.cachedModelSelector = {}
+				return defaultClient
+			} catch (fallbackError) {
+				throw new Error(`Failed to get client and fallback: ${errorMessage}`)
+			}
 		}
 	}
 
@@ -1483,85 +1507,6 @@ export class VsCodeLmHandler implements ApiHandler, SingleCompletionHandler {
 		// Common stop tokens
 		const stopTokens = ["<|end|>", "<|im_end|>", "<|endoftext|>"]
 		return stopTokens.some((token) => text.includes(token))
-	}
-
-	/**
-	 * Process streaming response and check for completion
-	 * @param stream The response stream
-	 * @param onChunk Callback for each chunk
-	 */
-	private async processStream(
-		stream: AsyncIterableIterator<vscode.LanguageModelChatMessage>,
-		onChunk: (chunk: string) => void,
-	): Promise<void> {
-		let processedChunks = 0
-		const startTime = Date.now()
-
-		try {
-			for await (const message of stream) {
-				// Check if stream has been cancelled or timed out
-				if (this.currentRequestCancellation?.token.isCancellationRequested) {
-					this.logInfo("Stream processing cancelled by user")
-					throw new vscode.CancellationError()
-				}
-
-				for (const part of message.content) {
-					if (part instanceof vscode.LanguageModelTextPart) {
-						const content = part.value
-						processedChunks++
-
-						// Log the chunk for debugging
-						this.log(
-							`Received chunk ${processedChunks}: ${content.substring(0, 50)}${content.length > 50 ? "..." : ""}`,
-						)
-
-						try {
-							// Check for stop tokens
-							if (this.hasStopToken(content)) {
-								this.log("Stop token detected, ending stream")
-								// Remove the stop token from the content
-								const stopTokens = ["<|end|>", "<|im_end|>", "<|endoftext|>"]
-								const cleanedContent = stopTokens.reduce(
-									(text: string, token: string) => text.replace(token, ""),
-									content,
-								)
-								onChunk(cleanedContent)
-								break
-							}
-
-							onChunk(content)
-						} catch (chunkError) {
-							this.logError(
-								`Error processing chunk ${processedChunks}: ${chunkError instanceof Error ? chunkError.message : "Unknown error"}`,
-							)
-							throw chunkError
-						}
-					}
-				}
-			}
-		} catch (error) {
-			if (error instanceof vscode.CancellationError) {
-				this.logInfo("Stream processing cancelled")
-				throw error
-			}
-
-			const errorMessage = error instanceof Error ? error.message : "Unknown error"
-			this.logError(`Stream processing error: ${errorMessage}`)
-
-			// Log detailed error information
-			this.logRequestDetails("stream_error", {
-				error: errorMessage,
-				stack: error instanceof Error ? error.stack : undefined,
-				processedChunks,
-				durationMs: Date.now() - startTime,
-			})
-
-			// Rethrow with more context
-			throw new Error(`VS Code LM stream processing failed: ${errorMessage}`)
-		} finally {
-			this.log(`Stream processing completed. Processed ${processedChunks} chunks in ${Date.now() - startTime}ms`)
-			this.flushLogs()
-		}
 	}
 
 	/**

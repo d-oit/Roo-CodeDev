@@ -381,6 +381,17 @@ describe("ClineProvider", () => {
 			customModes: [],
 			experiments: experimentDefault,
 			maxOpenTabsContext: 20,
+			braintrustModels: {
+				"gpt-4o": {
+					maxTokens: 128000,
+					contextWindow: 128000,
+					supportsPromptCache: true,
+					supportsImages: false,
+					supportsComputerUse: false,
+					inputPrice: 0.01,
+					description: "",
+				},
+			},
 		}
 
 		const message: ExtensionMessage = {

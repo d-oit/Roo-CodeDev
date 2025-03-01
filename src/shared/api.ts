@@ -777,24 +777,36 @@ export const unboundDefaultModelInfo: ModelInfo = {
 	cacheReadsPrice: 0.3,
 }
 
-// Add Braintrust model IDs
+// Constants for Braintrust configuration
+export const BRAINTRUST_BASE_URL = "https://api.braintrust.dev"
+export const BRAINTRUST_DEFAULT_TEMPERATURE = 0
+
+// Types for Braintrust models - keep it flexible since models are defined in package.json
 export type BraintrustModelId = string
 
-export const braintrustDefaultModelId: BraintrustModelId = "gpt-4o"
-
-export const braintrustDefaultModelInfo: ModelInfo = {
-	maxTokens: 128000,
-	contextWindow: 128000,
-	supportsPromptCache: true,
-	supportsImages: false,
-	inputPrice: 0.01,
-	outputPrice: 0.03,
-	description: "GPT-4 Optimized - High performance model with improved reasoning",
-}
-
 export interface BraintrustConfig {
-	defaultModelId: string
+	defaultModelId: BraintrustModelId
 	models: Record<string, ModelInfo>
 }
 
-// Remove getBraintrustConfig() as it will be handled by ClineProvider
+export const DEFAULT_BRAINTRUST_CONFIG: BraintrustConfig = {
+	defaultModelId: "",
+	models: {},
+}
+
+export function getBraintrustConfig(config?: any): BraintrustConfig {
+	if (!config) return DEFAULT_BRAINTRUST_CONFIG
+	return (config.get?.("braintrustConfig") ??
+		config.braintrustConfig ??
+		DEFAULT_BRAINTRUST_CONFIG) as BraintrustConfig
+}
+
+// Export getters for default model information
+export function getBraintrustDefaultModelId(config?: any): BraintrustModelId {
+	return getBraintrustConfig(config).defaultModelId
+}
+
+export function getBraintrustDefaultModelInfo(config?: any): ModelInfo | undefined {
+	const braintrustConfig = getBraintrustConfig(config)
+	return braintrustConfig.models[braintrustConfig.defaultModelId]
+}

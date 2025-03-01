@@ -1,16 +1,20 @@
 import React from "react"
 import { useExtensionState } from "../../context/ExtensionStateContext"
 import { ModelPicker } from "./ModelPicker"
-import { braintrustDefaultModelId } from "../../../../src/shared/api"
+import { getBraintrustConfig } from "../../../../src/shared/api"
 
 const BraintrustModelPicker: React.FC = () => {
-	const { apiConfiguration } = useExtensionState()
+	const extensionState = useExtensionState()
+	const braintrustConfig = getBraintrustConfig(extensionState)
 
-	// Get model ID from either braintrustModelId or apiModelId (when provider is braintrust)
+	// Get model ID from configuration sources in order of priority
 	const modelId =
-		apiConfiguration?.braintrustModelId ||
-		(apiConfiguration?.apiProvider === "braintrust" ? apiConfiguration?.apiModelId : undefined) ||
-		braintrustDefaultModelId
+		extensionState.apiConfiguration?.braintrustModelId ||
+		(extensionState.apiConfiguration?.apiProvider === "braintrust"
+			? extensionState.apiConfiguration?.apiModelId
+			: undefined) ||
+		braintrustConfig.defaultModelId ||
+		"" // Fallback to empty string if no model ID is found
 
 	return (
 		<ModelPicker
@@ -20,7 +24,7 @@ const BraintrustModelPicker: React.FC = () => {
 			infoKey="braintrustModelInfo"
 			refreshMessageType="refreshBraintrustModels"
 			refreshValues={{
-				apiKey: apiConfiguration?.braintrustApiKey,
+				apiKey: extensionState.apiConfiguration?.braintrustApiKey,
 			}}
 			serviceName="Braintrust"
 			serviceUrl="https://braintrust.dev/"

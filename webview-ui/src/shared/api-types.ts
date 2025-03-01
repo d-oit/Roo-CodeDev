@@ -11,8 +11,7 @@ export interface ModelInfo {
 
 export type BraintrustModelId = string
 
-export const braintrustDefaultModelId = "gpt-4o"
-
+// Remove the hardcoded default model ID since it comes from package.json config
 export interface BraintrustConfig {
 	defaultModelId: string
 	models: Record<string, ModelInfo>

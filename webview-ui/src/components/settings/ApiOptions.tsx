@@ -5,6 +5,7 @@ import { VSCodeLink, VSCodeRadio, VSCodeRadioGroup, VSCodeTextField } from "@vsc
 import * as vscodemodels from "vscode"
 
 import { Slider } from "@/components/ui"
+import { defaultBraintrustConfig } from "../../shared/braintrust-config"
 
 import {
 	ApiConfiguration,
@@ -33,7 +34,6 @@ import {
 	unboundDefaultModelInfo,
 	requestyDefaultModelId,
 	requestyDefaultModelInfo,
-	braintrustDefaultModelId,
 } from "../../../../src/shared/api"
 import { ExtensionMessage } from "../../../../src/shared/ExtensionMessage"
 
@@ -47,6 +47,7 @@ import { ModelInfoView } from "./ModelInfoView"
 import { DROPDOWN_Z_INDEX } from "./styles"
 import { RequestyModelPicker } from "./RequestyModelPicker"
 import { TemperatureControl } from "./TemperatureControl"
+import BraintrustModelPicker from "./BraintrustModelPicker"
 
 interface ApiOptionsProps {
 	uriScheme: string | undefined
@@ -74,6 +75,9 @@ const ApiOptions = ({
 	const [azureApiVersionSelected, setAzureApiVersionSelected] = useState(!!apiConfiguration?.azureApiVersion)
 	const [openRouterBaseUrlSelected, setOpenRouterBaseUrlSelected] = useState(!!apiConfiguration?.openRouterBaseUrl)
 	const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false)
+	const [braintrustBaseUrlSelected, setBraintrustBaseUrlSelected] = useState(
+		Boolean(apiConfiguration?.braintrustBaseUrl),
+	)
 
 	const inputEventTransform = <E,>(event: E) => (event as { target: HTMLInputElement })?.target?.value as any
 	const noTransform = <T,>(value: T) => value
@@ -178,8 +182,8 @@ const ApiOptions = ({
 			case "braintrust":
 				return {
 					selectedProvider: provider,
-					selectedModelId: modelId || braintrustDefaultModelId,
-					selectedModelInfo: availableBraintrustModels[modelId || braintrustDefaultModelId] || {
+					selectedModelId: modelId || defaultBraintrustConfig.defaultModelId,
+					selectedModelInfo: availableBraintrustModels[modelId || defaultBraintrustConfig.defaultModelId] || {
 						maxTokens: 8192,
 						contextWindow: 8192,
 						description: "Default Braintrust model configuration",
@@ -1338,6 +1342,56 @@ const ApiOptions = ({
 			{selectedProvider === "glama" && <GlamaModelPicker />}
 			{selectedProvider === "openrouter" && <OpenRouterModelPicker />}
 			{selectedProvider === "requesty" && <RequestyModelPicker />}
+			{selectedProvider === "braintrust" && (
+				<div>
+					<VSCodeTextField
+						value={apiConfiguration?.braintrustApiKey || ""}
+						style={{ width: "100%" }}
+						type="password"
+						onInput={handleInputChange("braintrustApiKey")}
+						placeholder="Enter API Key...">
+						<span style={{ fontWeight: 500 }}>Braintrust API Key</span>
+					</VSCodeTextField>
+					<p
+						style={{
+							fontSize: "12px",
+							marginTop: 3,
+							color: "var(--vscode-descriptionForeground)",
+						}}>
+						This key is stored locally and only used to make API requests from this extension.
+						{!apiConfiguration?.braintrustApiKey && (
+							<VSCodeLink
+								href="https://braintrust.dev/"
+								style={{ display: "inline", fontSize: "inherit" }}>
+								You can get a Braintrust API key by signing up here.
+							</VSCodeLink>
+						)}
+					</p>
+
+					<Checkbox
+						checked={braintrustBaseUrlSelected}
+						onChange={(checked: boolean) => {
+							setBraintrustBaseUrlSelected(checked)
+							if (!checked) {
+								setApiConfigurationField("braintrustBaseUrl", "")
+							}
+						}}>
+						Use custom base URL
+					</Checkbox>
+
+					{braintrustBaseUrlSelected && (
+						<VSCodeTextField
+							value={apiConfiguration?.braintrustBaseUrl || ""}
+							style={{ width: "100%", marginTop: 3 }}
+							type="url"
+							onInput={handleInputChange("braintrustBaseUrl")}
+							placeholder="Default: https://api.braintrust.dev"
+						/>
+					)}
+
+					<BraintrustModelPicker />
+				</div>
+			)}
 
 			{selectedProvider !== "glama" &&
 				selectedProvider !== "openrouter" &&
@@ -1345,7 +1399,8 @@ const ApiOptions = ({
 				selectedProvider !== "openai" &&
 				selectedProvider !== "ollama" &&
 				selectedProvider !== "lmstudio" &&
-				selectedProvider !== "unbound" && (
+				selectedProvider !== "unbound" &&
+				selectedProvider !== "braintrust" && (
 					<>
 						<div className="dropdown-container">
 							<label htmlFor="model-id">
@@ -1528,13 +1583,14 @@ export function normalizeApiConfiguration(apiConfiguration?: ApiConfiguration) {
 		case "braintrust":
 			return {
 				selectedProvider: provider,
-				selectedModelId: modelId || braintrustDefaultModelId,
+				selectedModelId: modelId || defaultBraintrustConfig.defaultModelId,
 				selectedModelInfo: {
 					maxTokens: 8192,
 					contextWindow: 8192,
 					description: "Default Braintrust model configuration",
 					supportsImages: true,
 					supportsPromptCache: true,
+					supportsComputerUse: true,
 				},
 			}
 		default:

@@ -94,7 +94,12 @@ export function activate(context: vscode.ExtensionContext) {
 	}
 
 	// Create BraintrustHandler instance
-	braintrustHandler = new BraintrustHandler(braintrustConfig)
+	try {
+		braintrustHandler = new BraintrustHandler(braintrustConfig)
+	} catch (error) {
+		// Log the error but don't let it prevent extension activation
+		outputChannel.appendLine(`Failed to initialize Braintrust handler: ${error}`)
+	}
 
 	// Add this to your command registrations
 	context.subscriptions.push(

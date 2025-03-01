@@ -7,6 +7,7 @@ import { GitCommit } from "../utils/git"
 import { Mode, CustomModePrompts, ModeConfig } from "./modes"
 import { CustomSupportPrompts } from "./support-prompt"
 import { ExperimentId } from "./experiments"
+import { BraintrustConfig } from "./api-types"
 
 export interface LanguageModelChatSelector {
 	vendor?: string
@@ -131,6 +132,8 @@ export interface ExtensionState {
 	customModes: ModeConfig[]
 	toolRequirements?: Record<string, boolean> // Map of tool names to their requirements (e.g. {"apply_diff": true} if diffEnabled)
 	maxOpenTabsContext: number // Maximum number of VSCode open tabs to include in context (0-500)
+	braintrustConfig?: BraintrustConfig
+	braintrustModels?: Record<string, ModelInfo>
 }
 
 export interface ClineMessage {

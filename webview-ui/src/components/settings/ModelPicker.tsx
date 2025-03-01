@@ -39,8 +39,9 @@ interface ModelPickerProps<T extends ModelProvider = ModelProvider> {
 	refreshValues?: Record<string, any>
 	serviceName: string
 	serviceUrl: string
-	recommendedModel: string
+	recommendedModel?: string
 	allowCustomModel?: boolean
+	models?: Record<string, any>
 }
 
 export const ModelPicker = ({
@@ -194,7 +195,9 @@ export const ModelPicker = ({
 					{serviceName}.
 				</VSCodeLink>
 				If you're unsure which model to choose, Roo Code works best with{" "}
-				<VSCodeLink onClick={() => onSelect(recommendedModel)}>{recommendedModel}.</VSCodeLink>
+				{recommendedModel && (
+					<VSCodeLink onClick={() => onSelect(recommendedModel)}>{recommendedModel}.</VSCodeLink>
+				)}
 				You can also try searching "free" for no-cost options currently available.
 			</p>
 			{allowCustomModel && isCustomModel && (

@@ -46,6 +46,7 @@ export interface ExtensionMessage {
 		| "unboundModels"
 		| "refreshUnboundModels"
 		| "currentCheckpointUpdated"
+		| "refreshBraintrustModels"
 		| "braintrustModels"
 	text?: string
 	action?:

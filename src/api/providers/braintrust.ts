@@ -167,7 +167,8 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 	}
 
 	private async isModelAvailable(modelId: string): Promise<boolean> {
-		const available = modelId in braintrustModels
+		const models = this.getBraintrustModels()
+		const available = modelId in models
 		this.logDebug(`Checking model availability: modelId=${modelId}, available=${available}`)
 		return available
 	}

@@ -60,6 +60,7 @@ type SecretKey =
 	| "mistralApiKey"
 	| "unboundApiKey"
 	| "requestyApiKey"
+	| "braintrustApiKey"
 type GlobalStateKey =
 	| "apiProvider"
 	| "apiModelId"
@@ -130,6 +131,10 @@ type GlobalStateKey =
 	| "modelTemperature"
 	| "mistralCodestralUrl"
 	| "maxOpenTabsContext"
+	| "braintrustBaseUrl"
+	| "braintrustProjectId"
+	| "braintrustModelId"
+	| "braintrustModelInfo"
 
 export const GlobalFileNames = {
 	apiConversationHistory: "api_conversation_history.json",
@@ -1675,6 +1680,11 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			requestyModelId,
 			requestyModelInfo,
 			modelTemperature,
+			braintrustApiKey,
+			braintrustBaseUrl,
+			braintrustProjectId,
+			braintrustModelId,
+			braintrustModelInfo,
 		} = apiConfiguration
 		await Promise.all([
 			this.updateGlobalState("apiProvider", apiProvider),
@@ -1723,6 +1733,11 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			this.updateGlobalState("requestyModelId", requestyModelId),
 			this.updateGlobalState("requestyModelInfo", requestyModelInfo),
 			this.updateGlobalState("modelTemperature", modelTemperature),
+			this.storeSecret("braintrustApiKey", braintrustApiKey),
+			this.updateGlobalState("braintrustBaseUrl", braintrustBaseUrl),
+			this.updateGlobalState("braintrustProjectId", braintrustProjectId),
+			this.updateGlobalState("braintrustModelId", braintrustModelId),
+			this.updateGlobalState("braintrustModelInfo", braintrustModelInfo),
 		])
 		if (this.cline) {
 			this.cline.api = buildApiHandler(apiConfiguration)

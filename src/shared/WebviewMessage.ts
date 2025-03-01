@@ -96,6 +96,7 @@ export interface WebviewMessage {
 		| "checkpointRestore"
 		| "deleteMcpServer"
 		| "maxOpenTabsContext"
+		| "refreshBraintrustModels"
 	text?: string
 	disabled?: boolean
 	askResponse?: ClineAskResponse

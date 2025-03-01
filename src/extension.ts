@@ -1,12 +1,15 @@
 import * as vscode from "vscode"
-
 import { ClineProvider } from "./core/webview/ClineProvider"
 import { createClineAPI } from "./exports"
-import "./utils/path" // Necessary to have access to String.prototype.toPosix.
+import "./utils/path"
 import { CodeActionProvider } from "./core/CodeActionProvider"
 import { DIFF_VIEW_URI_SCHEME } from "./integrations/editor/DiffViewProvider"
 import { handleUri, registerCommands, registerCodeActions, registerTerminalActions } from "./activate"
 import { McpServerManager } from "./services/mcp/McpServerManager"
+import { BraintrustHandler } from "./api/providers/braintrust"
+import { ApiHandlerOptions } from "./shared/api"
+
+let braintrustHandler: BraintrustHandler
 
 /**
  * Built using https://github.com/microsoft/vscode-webview-ui-toolkit
@@ -82,6 +85,29 @@ export function activate(context: vscode.ExtensionContext) {
 
 	registerCodeActions(context)
 	registerTerminalActions(context)
+
+	// Get configuration
+	const config = vscode.workspace.getConfiguration("roo")
+	const braintrustConfig: ApiHandlerOptions = {
+		braintrustApiKey: config.get("braintrustApiKey") || "",
+		braintrustProjectId: config.get("braintrustProjectId") || "",
+	}
+
+	// Create BraintrustHandler instance
+	braintrustHandler = new BraintrustHandler(braintrustConfig)
+
+	// Add this to your command registrations
+	context.subscriptions.push(
+		vscode.commands.registerCommand("roo.refreshBraintrustModels", () => {
+			if (sidebarProvider) {
+				const models = braintrustHandler.getBraintrustModels()
+				sidebarProvider.postMessageToWebview({
+					type: "braintrustModels",
+					braintrustModels: models,
+				})
+			}
+		}),
+	)
 
 	return createClineAPI(outputChannel, sidebarProvider)
 }

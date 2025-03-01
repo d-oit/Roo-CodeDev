@@ -16,6 +16,7 @@ import { VsCodeLmHandler } from "./providers/vscode-lm"
 import { ApiStream } from "./transform/stream"
 import { UnboundHandler } from "./providers/unbound"
 import { RequestyHandler } from "./providers/requesty"
+import { BraintrustHandler } from "./providers/braintrust"
 
 export interface SingleCompletionHandler {
 	completePrompt(prompt: string): Promise<string>
@@ -31,6 +32,8 @@ export function buildApiHandler(configuration: ApiConfiguration): ApiHandler {
 	switch (apiProvider) {
 		case "anthropic":
 			return new AnthropicHandler(options)
+		case "braintrust":
+			return new BraintrustHandler(options)
 		case "glama":
 			return new GlamaHandler(options)
 		case "openrouter":

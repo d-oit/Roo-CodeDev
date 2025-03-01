@@ -33,6 +33,8 @@ import {
 	unboundDefaultModelInfo,
 	requestyDefaultModelId,
 	requestyDefaultModelInfo,
+	braintrustDefaultModelId,
+	braintrustModels,
 } from "../../../../src/shared/api"
 import { ExtensionMessage } from "../../../../src/shared/ExtensionMessage"
 
@@ -157,6 +159,7 @@ const ApiOptions = ({
 					options={[
 						{ value: "openrouter", label: "OpenRouter" },
 						{ value: "anthropic", label: "Anthropic" },
+						{ value: "braintrust", label: "Braintrust" },
 						{ value: "gemini", label: "Google Gemini" },
 						{ value: "deepseek", label: "DeepSeek" },
 						{ value: "openai-native", label: "OpenAI" },
@@ -1417,6 +1420,12 @@ export function normalizeApiConfiguration(apiConfiguration?: ApiConfiguration) {
 				selectedProvider: provider,
 				selectedModelId: apiConfiguration?.requestyModelId || requestyDefaultModelId,
 				selectedModelInfo: apiConfiguration?.requestyModelInfo || requestyDefaultModelInfo,
+			}
+		case "braintrust":
+			return {
+				selectedProvider: provider,
+				selectedModelId: modelId || braintrustDefaultModelId,
+				selectedModelInfo: braintrustModels[modelId || braintrustDefaultModelId],
 			}
 		default:
 			return getProviderData(anthropicModels, anthropicDefaultModelId)

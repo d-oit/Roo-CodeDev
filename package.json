@@ -257,6 +257,95 @@
 						],
 						"description": "Commands that can be auto-executed when 'Always approve execute operations' is enabled"
 					},
+					"roo-cline.braintrustConfig": {
+						"type": "object",
+						"default": {
+							"defaultModelId": "gpt-4o",
+							"models": {
+								"gpt-4o": {
+									"maxTokens": 128000,
+									"contextWindow": 128000,
+									"supportsPromptCache": true,
+									"supportsImages": false,
+									"inputPrice": 0.01,
+									"outputPrice": 0.03,
+									"description": "GPT-4 Optimized - High performance model with improved reasoning"
+								},
+								"o1": {
+									"maxTokens": 128000,
+									"contextWindow": 128000,
+									"supportsPromptCache": true,
+									"supportsImages": true,
+									"inputPrice": 0.015,
+									"outputPrice": 0.075,
+									"description": "O1 - Advanced multimodal model with superior reasoning capabilities"
+								},
+								"gpt-4o-mini": {
+									"maxTokens": 128000,
+									"contextWindow": 128000,
+									"supportsPromptCache": true,
+									"supportsImages": false,
+									"inputPrice": 0.003,
+									"outputPrice": 0.015,
+									"description": "GPT-4 Optimized Mini - Cost-effective variant with strong performance"
+								},
+								"claude-3-5-sonnet-latest": {
+									"maxTokens": 200000,
+									"contextWindow": 200000,
+									"supportsPromptCache": true,
+									"supportsImages": true,
+									"inputPrice": 0.008,
+									"outputPrice": 0.024,
+									"description": "Latest Claude 3.5 Sonnet model with enhanced capabilities"
+								}
+							}
+						},
+						"properties": {
+							"defaultModelId": {
+								"type": "string",
+								"description": "Default model ID to use for Braintrust"
+							},
+							"models": {
+								"type": "object",
+								"additionalProperties": {
+									"type": "object",
+									"required": [
+										"maxTokens",
+										"contextWindow",
+										"description"
+									],
+									"properties": {
+										"maxTokens": {
+											"type": "number",
+											"description": "Maximum tokens supported by the model"
+										},
+										"contextWindow": {
+											"type": "number",
+											"description": "Context window size for the model"
+										},
+										"supportsPromptCache": {
+											"type": "boolean",
+											"description": "Whether the model supports prompt caching"
+										},
+										"inputPrice": {
+											"type": "number",
+											"description": "Price per 1K tokens for input"
+										},
+										"outputPrice": {
+											"type": "number",
+											"description": "Price per 1K tokens for output"
+										},
+										"description": {
+											"type": "string",
+											"description": "Description of the model"
+										}
+									}
+								},
+								"description": "Available Braintrust models configuration"
+							}
+						},
+						"description": "Configuration for Braintrust models and settings"
+					},
 					"roo-cline.vsCodeLmModelSelector": {
 						"type": "object",
 						"properties": {
@@ -285,6 +374,16 @@
 						"type": "boolean",
 						"default": false,
 						"description": "Log complete conversations with VS Code Language Model"
+					},
+					"roo-cline.debug.braintrust": {
+						"type": "boolean",
+						"default": false,
+						"description": "Enable detailed debug output for Braintrust API integration"
+					},
+					"roo-cline.debug.braintrust-conversation": {
+						"type": "boolean",
+						"default": false,
+						"description": "Log complete conversations with Braintrust API"
 					}
 				}
 			}
@@ -334,6 +433,7 @@
 		"@types/vscode": "^1.95.0",
 		"@vscode/codicons": "^0.0.36",
 		"axios": "^1.7.4",
+		"braintrust": "^0.0.184",
 		"cheerio": "^1.0.0",
 		"chokidar": "^4.0.1",
 		"clone-deep": "^4.0.1",

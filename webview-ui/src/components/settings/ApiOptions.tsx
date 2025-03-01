@@ -34,7 +34,6 @@ import {
 	requestyDefaultModelId,
 	requestyDefaultModelInfo,
 	braintrustDefaultModelId,
-	braintrustModels,
 } from "../../../../src/shared/api"
 import { ExtensionMessage } from "../../../../src/shared/ExtensionMessage"
 
@@ -69,6 +68,7 @@ const ApiOptions = ({
 	const [ollamaModels, setOllamaModels] = useState<string[]>([])
 	const [lmStudioModels, setLmStudioModels] = useState<string[]>([])
 	const [vsCodeLmModels, setVsCodeLmModels] = useState<vscodemodels.LanguageModelChatSelector[]>([])
+	const [availableBraintrustModels, setAvailableBraintrustModels] = useState<Record<string, ModelInfo>>({})
 	const [anthropicBaseUrlSelected, setAnthropicBaseUrlSelected] = useState(!!apiConfiguration?.anthropicBaseUrl)
 	const [anthropicThinkingBudget, setAnthropicThinkingBudget] = useState(apiConfiguration?.anthropicThinking)
 	const [azureApiVersionSelected, setAzureApiVersionSelected] = useState(!!apiConfiguration?.azureApiVersion)
@@ -91,8 +91,106 @@ const ApiOptions = ({
 	)
 
 	const { selectedProvider, selectedModelId, selectedModelInfo } = useMemo(() => {
-		return normalizeApiConfiguration(apiConfiguration)
-	}, [apiConfiguration])
+		const provider = apiConfiguration?.apiProvider || "anthropic"
+		const modelId = apiConfiguration?.apiModelId
+
+		const getProviderData = (models: Record<string, ModelInfo>, defaultId: string) => {
+			let selectedModelId: string
+			let selectedModelInfo: ModelInfo
+			if (modelId && modelId in models) {
+				selectedModelId = modelId
+				selectedModelInfo = models[modelId]
+			} else {
+				selectedModelId = defaultId
+				selectedModelInfo = models[defaultId]
+			}
+			return { selectedProvider: provider, selectedModelId, selectedModelInfo }
+		}
+
+		switch (provider) {
+			case "anthropic":
+				return getProviderData(anthropicModels, anthropicDefaultModelId)
+			case "bedrock":
+				return getProviderData(bedrockModels, bedrockDefaultModelId)
+			case "vertex":
+				return getProviderData(vertexModels, vertexDefaultModelId)
+			case "gemini":
+				return getProviderData(geminiModels, geminiDefaultModelId)
+			case "deepseek":
+				return getProviderData(deepSeekModels, deepSeekDefaultModelId)
+			case "openai-native":
+				return getProviderData(openAiNativeModels, openAiNativeDefaultModelId)
+			case "glama":
+				return {
+					selectedProvider: provider,
+					selectedModelId: apiConfiguration?.glamaModelId || glamaDefaultModelId,
+					selectedModelInfo: apiConfiguration?.glamaModelInfo || glamaDefaultModelInfo,
+				}
+			case "mistral":
+				return getProviderData(mistralModels, mistralDefaultModelId)
+			case "openrouter":
+				return {
+					selectedProvider: provider,
+					selectedModelId: apiConfiguration?.openRouterModelId || openRouterDefaultModelId,
+					selectedModelInfo: apiConfiguration?.openRouterModelInfo || openRouterDefaultModelInfo,
+				}
+			case "openai":
+				return {
+					selectedProvider: provider,
+					selectedModelId: apiConfiguration?.openAiModelId || "",
+					selectedModelInfo: apiConfiguration?.openAiCustomModelInfo || openAiModelInfoSaneDefaults,
+				}
+			case "ollama":
+				return {
+					selectedProvider: provider,
+					selectedModelId: apiConfiguration?.ollamaModelId || "",
+					selectedModelInfo: openAiModelInfoSaneDefaults,
+				}
+			case "lmstudio":
+				return {
+					selectedProvider: provider,
+					selectedModelId: apiConfiguration?.lmStudioModelId || "",
+					selectedModelInfo: openAiModelInfoSaneDefaults,
+				}
+			case "vscode-lm":
+				return {
+					selectedProvider: provider,
+					selectedModelId: apiConfiguration?.vsCodeLmModelSelector
+						? `${apiConfiguration.vsCodeLmModelSelector.vendor}/${apiConfiguration.vsCodeLmModelSelector.family}`
+						: "",
+					selectedModelInfo: {
+						...openAiModelInfoSaneDefaults,
+						supportsImages: false, // VSCode LM API currently doesn't support images
+					},
+				}
+			case "unbound":
+				return {
+					selectedProvider: provider,
+					selectedModelId: apiConfiguration?.unboundModelId || unboundDefaultModelId,
+					selectedModelInfo: apiConfiguration?.unboundModelInfo || unboundDefaultModelInfo,
+				}
+			case "requesty":
+				return {
+					selectedProvider: provider,
+					selectedModelId: apiConfiguration?.requestyModelId || requestyDefaultModelId,
+					selectedModelInfo: apiConfiguration?.requestyModelInfo || requestyDefaultModelInfo,
+				}
+			case "braintrust":
+				return {
+					selectedProvider: provider,
+					selectedModelId: modelId || braintrustDefaultModelId,
+					selectedModelInfo: availableBraintrustModels[modelId || braintrustDefaultModelId] || {
+						maxTokens: 8192,
+						contextWindow: 8192,
+						description: "Default Braintrust model configuration",
+						supportsImages: true,
+						supportsPromptCache: true,
+					},
+				}
+			default:
+				return getProviderData(anthropicModels, anthropicDefaultModelId)
+		}
+	}, [apiConfiguration, availableBraintrustModels])
 
 	// Pull ollama/lmstudio models
 	// Debounced model updates, only executed 250ms after the user stops typing
@@ -104,6 +202,8 @@ const ApiOptions = ({
 				vscode.postMessage({ type: "requestLmStudioModels", text: apiConfiguration?.lmStudioBaseUrl })
 			} else if (selectedProvider === "vscode-lm") {
 				vscode.postMessage({ type: "requestVsCodeLmModels" })
+			} else if (selectedProvider === "braintrust") {
+				vscode.postMessage({ type: "refreshBraintrustModels" })
 			}
 		},
 		250,
@@ -120,6 +220,8 @@ const ApiOptions = ({
 		} else if (message.type === "vsCodeLmModels" && Array.isArray(message.vsCodeLmModels)) {
 			const newModels = message.vsCodeLmModels
 			setVsCodeLmModels(newModels)
+		} else if (message.type === "braintrustModels" && typeof message.braintrustModels === "object") {
+			setAvailableBraintrustModels(message.braintrustModels)
 		}
 	}, [])
 	useEvent("message", handleMessage)
@@ -1337,6 +1439,7 @@ export function getOpenRouterAuthUrl(uriScheme?: string) {
 	return `https://openrouter.ai/auth?callback_url=${uriScheme || "vscode"}://rooveterinaryinc.roo-cline/openrouter`
 }
 
+// Export a static version of normalizeApiConfiguration for other components
 export function normalizeApiConfiguration(apiConfiguration?: ApiConfiguration) {
 	const provider = apiConfiguration?.apiProvider || "anthropic"
 	const modelId = apiConfiguration?.apiModelId
@@ -1353,6 +1456,7 @@ export function normalizeApiConfiguration(apiConfiguration?: ApiConfiguration) {
 		}
 		return { selectedProvider: provider, selectedModelId, selectedModelInfo }
 	}
+
 	switch (provider) {
 		case "anthropic":
 			return getProviderData(anthropicModels, anthropicDefaultModelId)
@@ -1406,7 +1510,7 @@ export function normalizeApiConfiguration(apiConfiguration?: ApiConfiguration) {
 					: "",
 				selectedModelInfo: {
 					...openAiModelInfoSaneDefaults,
-					supportsImages: false, // VSCode LM API currently doesn't support images
+					supportsImages: false,
 				},
 			}
 		case "unbound":
@@ -1425,7 +1529,13 @@ export function normalizeApiConfiguration(apiConfiguration?: ApiConfiguration) {
 			return {
 				selectedProvider: provider,
 				selectedModelId: modelId || braintrustDefaultModelId,
-				selectedModelInfo: braintrustModels[modelId || braintrustDefaultModelId],
+				selectedModelInfo: {
+					maxTokens: 8192,
+					contextWindow: 8192,
+					description: "Default Braintrust model configuration",
+					supportsImages: true,
+					supportsPromptCache: true,
+				},
 			}
 		default:
 			return getProviderData(anthropicModels, anthropicDefaultModelId)

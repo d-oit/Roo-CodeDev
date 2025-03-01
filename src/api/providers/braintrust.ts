@@ -106,15 +106,6 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 				}
 			}
 		})
-
-		// Add configuration change listener
-		vscode.workspace.onDidChangeConfiguration((e) => {
-			if (e.affectsConfiguration("roo-cline.braintrustConfig")) {
-				this.refreshModelCache()
-				// Notify UI of model changes
-				vscode.commands.executeCommand("roo.refreshBraintrustModels")
-			}
-		})
 	}
 
 	private log(message: string): void {

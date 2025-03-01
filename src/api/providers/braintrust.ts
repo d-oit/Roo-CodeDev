@@ -3,13 +3,14 @@ import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai"
 import { initLogger, wrapOpenAI, wrapTraced } from "braintrust"
 import { ApiHandler, SingleCompletionHandler } from "../"
-import { ApiHandlerOptions, braintrustDefaultModelId, braintrustModels, ModelInfo } from "../../shared/api"
+import { ApiHandlerOptions, braintrustDefaultModelId, ModelInfo } from "../../shared/api"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { ApiStream, ApiStreamTextChunk, ApiStreamUsageChunk } from "../transform/stream"
 import { logger } from "../../utils/logging"
 
 const BRAINTRUST_DEFAULT_TEMPERATURE = 0
 const MODEL_CHECK_INTERVAL = 60000 // 1 minute
+const BRAINTRUST_BASE_URL = "https://api.braintrust.dev/v1"
 
 export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 	private options: ApiHandlerOptions
@@ -35,7 +36,7 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 		}
 
 		this.options = options
-		const baseURL = options.braintrustBaseUrl || "https://api.braintrustdata.com/v1"
+		const baseURL = options.braintrustBaseUrl || BRAINTRUST_BASE_URL
 
 		// Initialize debug configuration
 		const debugConfig = vscode.workspace.getConfiguration("roo")
@@ -299,28 +300,33 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 		}
 	}
 
+	private getBraintrustModels(): Record<string, ModelInfo> {
+		const config = vscode.workspace.getConfiguration("roo-cline")
+		const braintrustConfig = (config.get("braintrustConfig") as {
+			defaultModelId?: string
+			models?: Record<string, ModelInfo>
+		}) || { models: {} }
+
+		return braintrustConfig.models || {}
+	}
+
 	getModel(): { id: string; info: ModelInfo } {
 		const modelId = this.options.apiModelId ?? braintrustDefaultModelId
+		const models = this.getBraintrustModels()
 
-		// Check if we have a cached model and it matches the current model ID
 		if (this.cachedModel && this.cachedModelId === modelId) {
 			return this.cachedModel
 		}
 
-		this.logDebug(`Fetching model info: modelId=${modelId}`)
-
-		const modelInfo = braintrustModels[modelId]
+		const modelInfo = models[modelId]
 		if (!modelInfo) {
 			const error = `Model ${modelId} not found in Braintrust configuration`
 			this.logError(error)
 			throw new Error(error)
 		}
 
-		// Cache the model info
 		this.cachedModel = { id: modelId, info: modelInfo }
 		this.cachedModelId = modelId
-
-		this.logDebug(`Updated model cache: modelId=${modelId}, modelInfo=${JSON.stringify(modelInfo)}`)
 
 		return this.cachedModel
 	}

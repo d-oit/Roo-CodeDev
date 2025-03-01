@@ -23,7 +23,7 @@ import { vscode } from "../../utils/vscode"
 import { normalizeApiConfiguration } from "./ApiOptions"
 import { ModelInfoView } from "./ModelInfoView"
 
-type ModelProvider = "glama" | "openRouter" | "unbound" | "requesty" | "openAi"
+type ModelProvider = "glama" | "openRouter" | "unbound" | "requesty" | "openAi" | "braintrust"
 
 type ModelKeys<T extends ModelProvider> = `${T}Models`
 type ConfigKeys<T extends ModelProvider> = `${T}ModelId`

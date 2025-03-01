@@ -1,13 +1,10 @@
-import { ModelInfo, braintrustDefaultModelId, braintrustModels } from "./api-types"
+import { BraintrustConfig, braintrustDefaultModelId } from "./api-types"
 
-interface BraintrustConfig {
-	defaultModelId: string
-	models: Record<string, ModelInfo>
-}
-
+// This will now just provide a default empty configuration
+// The actual models will come from the extension's configuration
 export function getBraintrustConfig(): BraintrustConfig {
 	return {
 		defaultModelId: braintrustDefaultModelId,
-		models: braintrustModels,
+		models: {}, // Models will be populated from VS Code configuration
 	}
 }

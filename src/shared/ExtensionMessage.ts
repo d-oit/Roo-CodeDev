@@ -46,6 +46,7 @@ export interface ExtensionMessage {
 		| "unboundModels"
 		| "refreshUnboundModels"
 		| "currentCheckpointUpdated"
+		| "braintrustModels"
 	text?: string
 	action?:
 		| "chatButtonClicked"
@@ -78,6 +79,7 @@ export interface ExtensionMessage {
 	mode?: Mode
 	customMode?: ModeConfig
 	slug?: string
+	braintrustModels?: Record<string, ModelInfo>
 }
 
 export interface ApiConfigMeta {

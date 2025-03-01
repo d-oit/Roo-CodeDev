@@ -9,17 +9,11 @@ export interface ModelInfo {
 	outputPrice?: number
 }
 
-export const braintrustDefaultModelId = "braintrust-default"
+export type BraintrustModelId = string
 
-export const braintrustModels: Record<string, ModelInfo> = {
-	"braintrust-default": {
-		maxTokens: 8192,
-		contextWindow: 32768,
-		supportsImages: false,
-		supportsComputerUse: false,
-		supportsPromptCache: false,
-		description: "Braintrust Default Model",
-		inputPrice: 0,
-		outputPrice: 0,
-	},
+export const braintrustDefaultModelId = "gpt-4o"
+
+export interface BraintrustConfig {
+	defaultModelId: string
+	models: Record<string, ModelInfo>
 }

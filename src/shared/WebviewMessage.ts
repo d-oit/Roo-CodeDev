@@ -45,6 +45,7 @@ export interface WebviewMessage {
 		| "refreshOpenAiModels"
 		| "refreshUnboundModels"
 		| "refreshRequestyModels"
+		| "refreshBraintrustModels"
 		| "alwaysAllowBrowser"
 		| "alwaysAllowMcp"
 		| "alwaysAllowModeSwitch"

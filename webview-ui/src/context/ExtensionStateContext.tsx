@@ -12,6 +12,8 @@ import {
 	unboundDefaultModelInfo,
 	requestyDefaultModelId,
 	requestyDefaultModelInfo,
+	braintrustDefaultModelId,
+	braintrustDefaultModelInfo,
 } from "../../../src/shared/api"
 import { vscode } from "../utils/vscode"
 import { convertTextMateToHljs } from "../utils/textMateToHljs"
@@ -31,6 +33,7 @@ export interface ExtensionStateContextType extends ExtensionState {
 	openRouterModels: Record<string, ModelInfo>
 	unboundModels: Record<string, ModelInfo>
 	openAiModels: string[]
+	braintrustModels: Record<string, ModelInfo>
 	mcpServers: McpServer[]
 	currentCheckpoint?: string
 	filePaths: string[]
@@ -141,6 +144,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 	const [openAiModels, setOpenAiModels] = useState<string[]>([])
 	const [mcpServers, setMcpServers] = useState<McpServer[]>([])
 	const [currentCheckpoint, setCurrentCheckpoint] = useState<string>()
+	const [braintrustModels, setBraintrustModels] = useState<Record<string, ModelInfo>>({})
 
 	const setListApiConfigMeta = useCallback(
 		(value: ApiConfigMeta[]) => setState((prevState) => ({ ...prevState, listApiConfigMeta: value })),
@@ -248,6 +252,14 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					setListApiConfigMeta(message.listApiConfig ?? [])
 					break
 				}
+				case "braintrustModels": {
+					const updatedModels = message.braintrustModels ?? {}
+					setBraintrustModels({
+						[braintrustDefaultModelId]: braintrustDefaultModelInfo,
+						...updatedModels,
+					})
+					break
+				}
 			}
 		},
 		[setListApiConfigMeta],
@@ -269,6 +281,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		openRouterModels,
 		openAiModels,
 		unboundModels,
+		braintrustModels,
 		mcpServers,
 		currentCheckpoint,
 		filePaths,

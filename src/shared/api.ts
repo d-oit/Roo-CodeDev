@@ -81,6 +81,8 @@ export type ApiConfiguration = ApiHandlerOptions & {
 	braintrustApiKey?: string
 	braintrustBaseUrl?: string
 	braintrustProjectId?: string
+	braintrustModelId?: string
+	braintrustModelInfo?: ModelInfo
 }
 
 // Models
@@ -776,55 +778,18 @@ export const unboundDefaultModelInfo: ModelInfo = {
 }
 
 // Add Braintrust model IDs
-export type BraintrustModelId = "gpt-4o" | "o1" | "gpt-4o-mini" | "claude-3-5-sonnet-latest" | string // Allow custom model IDs
-
-// Add default model configurations
-export const braintrustModels: Record<string, ModelInfo> = {
-	"gpt-4o": {
-		maxTokens: 128000,
-		contextWindow: 128000,
-		supportsPromptCache: true,
-		supportsImages: false,
-		inputPrice: 0.01,
-		outputPrice: 0.03,
-		description: "GPT-4 Optimized - High performance model with improved reasoning",
-	},
-	o1: {
-		maxTokens: 128000,
-		contextWindow: 128000,
-		supportsPromptCache: true,
-		supportsImages: true,
-		inputPrice: 0.015,
-		outputPrice: 0.075,
-		description: "O1 - Advanced multimodal model with superior reasoning capabilities",
-	},
-	"gpt-4o-mini": {
-		maxTokens: 128000,
-		contextWindow: 128000,
-		supportsPromptCache: true,
-		supportsImages: false,
-		inputPrice: 0.003,
-		outputPrice: 0.015,
-		description: "GPT-4 Optimized Mini - Cost-effective variant with strong performance",
-	},
-	"claude-3-5-sonnet-latest": {
-		maxTokens: 200000,
-		contextWindow: 200000,
-		supportsPromptCache: true,
-		supportsImages: true,
-		inputPrice: 0.008,
-		outputPrice: 0.024,
-		description: "Latest Claude 3.5 Sonnet model with enhanced capabilities",
-	},
-}
+export type BraintrustModelId = string
 
 export const braintrustDefaultModelId: BraintrustModelId = "gpt-4o"
 
-// Ensure BraintrustHandler uses these options
-export interface BraintrustHandlerOptions extends ApiHandlerOptions {
-	braintrustApiKey: string // Make this required for BraintrustHandler
-	braintrustBaseUrl?: string
-	braintrustProjectId?: string
+export const braintrustDefaultModelInfo: ModelInfo = {
+	maxTokens: 128000,
+	contextWindow: 128000,
+	supportsPromptCache: true,
+	supportsImages: false,
+	inputPrice: 0.01,
+	outputPrice: 0.03,
+	description: "GPT-4 Optimized - High performance model with improved reasoning",
 }
 
 export interface BraintrustConfig {
@@ -832,9 +797,4 @@ export interface BraintrustConfig {
 	models: Record<string, ModelInfo>
 }
 
-export function getBraintrustConfig(): BraintrustConfig {
-	return {
-		defaultModelId: braintrustDefaultModelId,
-		models: braintrustModels,
-	}
-}
+// Remove getBraintrustConfig() as it will be handled by ClineProvider

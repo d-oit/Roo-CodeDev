@@ -46,7 +46,17 @@ function convertAnthropicContentToGemini(content: Anthropic.Messages.MessagePara
 					// The only case when tool_result could be array is when the tool failed and we're providing ie user feedback potentially with images
 					const textParts = block.content.filter((part) => part.type === "text")
 					const imageParts = block.content.filter((part) => part.type === "image")
-					const text = textParts.length > 0 ? textParts.map((part) => part.text).join("\n\n") : ""
+					const text =
+						textParts.length > 0
+							? textParts
+									.map((part) => {
+										if (part.type === "text") {
+											return part.text
+										}
+										return ""
+									})
+									.join("\n\n")
+							: ""
 					const imageText = imageParts.length > 0 ? "\n\n(See next part for image)" : ""
 					return [
 						{
@@ -62,8 +72,8 @@ function convertAnthropicContentToGemini(content: Anthropic.Messages.MessagePara
 							(part) =>
 								({
 									inlineData: {
-										data: part.source.data,
-										mimeType: part.source.media_type,
+										data: part.type === "image" ? part.source.data : "",
+										mimeType: part.type === "image" ? part.source.media_type : "text/plain",
 									},
 								}) as InlineDataPart,
 						),

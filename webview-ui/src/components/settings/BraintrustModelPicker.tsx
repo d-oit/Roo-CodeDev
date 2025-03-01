@@ -1,11 +1,9 @@
 import React from "react"
 import { useExtensionState } from "../../context/ExtensionStateContext"
 import { ModelPicker } from "./ModelPicker"
-import { getBraintrustConfig } from "../../../../src/shared/api"
 
 const BraintrustModelPicker: React.FC = () => {
 	const extensionState = useExtensionState()
-	const braintrustConfig = getBraintrustConfig(extensionState)
 
 	// Get model ID from configuration sources in order of priority
 	const modelId =
@@ -13,16 +11,12 @@ const BraintrustModelPicker: React.FC = () => {
 		(extensionState.apiConfiguration?.apiProvider === "braintrust"
 			? extensionState.apiConfiguration?.apiModelId
 			: undefined) ||
-		braintrustConfig.defaultModelId ||
 		"" // Fallback to empty string if no model ID is found
-
-	// Get models from braintrustConfig
-	const models = braintrustConfig.models || {}
 
 	return (
 		<ModelPicker
 			defaultModelId={modelId}
-			models={models} // Pass models directly
+			modelsKey="braintrustModels"
 			configKey="braintrustModelId"
 			infoKey="braintrustModelInfo"
 			refreshMessageType="refreshBraintrustModels"
@@ -31,7 +25,7 @@ const BraintrustModelPicker: React.FC = () => {
 			}}
 			serviceName="Braintrust"
 			serviceUrl="https://braintrust.dev/"
-			recommendedModel="claude-3-5-sonnet-latest"
+			recommendedModel="claude-3-7-sonnet-20250219"
 			allowCustomModel={false}
 		/>
 	)

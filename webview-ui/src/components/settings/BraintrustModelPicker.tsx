@@ -16,10 +16,13 @@ const BraintrustModelPicker: React.FC = () => {
 		braintrustConfig.defaultModelId ||
 		"" // Fallback to empty string if no model ID is found
 
+	// Get models from braintrustConfig
+	const models = braintrustConfig.models || {}
+
 	return (
 		<ModelPicker
 			defaultModelId={modelId}
-			modelsKey="braintrustModels"
+			models={models} // Pass models directly
 			configKey="braintrustModelId"
 			infoKey="braintrustModelInfo"
 			refreshMessageType="refreshBraintrustModels"

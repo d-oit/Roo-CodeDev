@@ -1,9 +1,19 @@
 import React from "react"
 import { useExtensionState } from "../../context/ExtensionStateContext"
 import { ModelPicker } from "./ModelPicker"
+import { vscode } from "../../utils/vscode"
+import { defaultBraintrustConfig } from "../../shared/braintrust-config"
 
 const BraintrustModelPicker: React.FC = () => {
 	const extensionState = useExtensionState()
+
+	// Load models from VS Code settings
+	React.useEffect(() => {
+		vscode.postMessage({
+			type: "getVSCodeSetting" as const,
+			value: "roo-cline.braintrustConfig",
+		})
+	}, [])
 
 	// Get model ID from configuration sources in order of priority
 	const modelId =
@@ -11,7 +21,7 @@ const BraintrustModelPicker: React.FC = () => {
 		(extensionState.apiConfiguration?.apiProvider === "braintrust"
 			? extensionState.apiConfiguration?.apiModelId
 			: undefined) ||
-		"" // Fallback to empty string if no model ID is found
+		defaultBraintrustConfig.defaultModelId // Fall back to default model ID
 
 	return (
 		<ModelPicker

@@ -97,13 +97,14 @@ export interface WebviewMessage {
 		| "deleteMcpServer"
 		| "maxOpenTabsContext"
 		| "refreshBraintrustModels"
+		| "getVSCodeSetting"
 	text?: string
 	disabled?: boolean
 	askResponse?: ClineAskResponse
 	apiConfiguration?: ApiConfiguration
 	images?: string[]
 	bool?: boolean
-	value?: number
+	value?: number | string
 	commands?: string[]
 	audioType?: AudioType
 	serverName?: string

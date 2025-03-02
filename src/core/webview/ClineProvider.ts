@@ -1018,7 +1018,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 					case "soundVolume":
 						const soundVolume = message.value ?? 0.5
 						await this.updateGlobalState("soundVolume", soundVolume)
-						setSoundVolume(soundVolume)
+						setSoundVolume(Number(soundVolume))
 						await this.postStateToWebview()
 						break
 					case "diffEnabled":
@@ -1229,7 +1229,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 						await this.postStateToWebview()
 						break
 					case "maxOpenTabsContext":
-						const tabCount = Math.min(Math.max(0, message.value ?? 20), 500)
+						const tabCount = Math.min(Math.max(0, Number(message.value ?? 20)), 500)
 						await this.updateGlobalState("maxOpenTabsContext", tabCount)
 						await this.postStateToWebview()
 						break

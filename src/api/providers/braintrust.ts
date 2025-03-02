@@ -19,8 +19,7 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 	private readonly options: ApiHandlerOptions
 	private cachedModel: { id: string; info: ModelInfo } | null = null
 	private modelCheckInterval?: NodeJS.Timeout
-	private static sharedOutputChannel?: vscode.OutputChannel
-	private outputChannel?: vscode.OutputChannel
+	private readonly outputChannel?: vscode.OutputChannel
 	private readonly enableDebugOutput: boolean
 	private readonly logConversations: boolean
 	private readonly LOG_BATCH_SIZE = 10
@@ -35,6 +34,11 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 		const debugConfig = vscode.workspace.getConfiguration("roo-cline.debug")
 		this.enableDebugOutput = debugConfig.get("braintrust") ?? false
 		this.logConversations = debugConfig.get("braintrust-conversation") ?? false
+
+		// Create output channel if debugging or conversation logging is enabled
+		if (this.enableDebugOutput || this.logConversations) {
+			this.outputChannel = vscode.window.createOutputChannel("Roo Code Braintrust")
+		}
 
 		if (!options.braintrustApiKey) {
 			throw new Error("Braintrust API key is required")
@@ -288,6 +292,20 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 			this.logError(
 				`Error checking model availability: ${error instanceof Error ? error.message : "Unknown error"}`,
 			)
+		}
+	}
+
+	updateConfiguration(config: Partial<ApiHandlerOptions>): void {
+		if (config.braintrustModelId) {
+			this.options.apiModelId = config.braintrustModelId
+			// Clear cached model to force refresh
+			this.cachedModel = null
+		}
+		if (config.braintrustModelInfo) {
+			this.cachedModel = {
+				id: this.options.apiModelId || "",
+				info: config.braintrustModelInfo,
+			}
 		}
 	}
 

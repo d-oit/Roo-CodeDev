@@ -1,6 +1,13 @@
 import * as vscode from "vscode"
 import { ClineProvider } from "./core/webview/ClineProvider"
 import { createClineAPI } from "./exports"
+import { ApiConfiguration } from "./shared/api"
+import { BraintrustConfig } from "./shared/api-types"
+
+function getBraintrustConfigFromSettings(config: vscode.WorkspaceConfiguration): BraintrustConfig {
+	const braintrustConfig = config.get<BraintrustConfig>("braintrustConfig")
+	return braintrustConfig || { defaultModelId: "", models: {} }
+}
 import "./utils/path"
 import { CodeActionProvider } from "./core/CodeActionProvider"
 import { DIFF_VIEW_URI_SCHEME } from "./integrations/editor/DiffViewProvider"
@@ -87,11 +94,37 @@ export function activate(context: vscode.ExtensionContext) {
 	registerTerminalActions(context)
 
 	// Get configuration
-	const config = vscode.workspace.getConfiguration("roo")
-	const braintrustConfig: ApiHandlerOptions = {
+	const config = vscode.workspace.getConfiguration("roo-cline")
+	const vscodeBraintrustConfig = getBraintrustConfigFromSettings(config)
+	const modelId = vscodeBraintrustConfig.defaultModelId || ""
+	const models = vscodeBraintrustConfig.models || {}
+
+	const braintrustConfig: ApiConfiguration = {
+		apiProvider: "braintrust",
 		braintrustApiKey: config.get("braintrustApiKey") || "",
 		braintrustProjectId: config.get("braintrustProjectId") || "",
+		braintrustModelId: modelId,
+		braintrustModelInfo: models[modelId],
 	}
+
+	// Watch for configuration changes
+	context.subscriptions.push(
+		vscode.workspace.onDidChangeConfiguration((e) => {
+			if (e.affectsConfiguration("roo-cline.braintrustConfig")) {
+				const newConfig = vscode.workspace.getConfiguration("roo-cline")
+				const newBraintrustConfig = getBraintrustConfigFromSettings(newConfig)
+				const newModelId = newBraintrustConfig.defaultModelId || ""
+				const newModels = newBraintrustConfig.models || {}
+
+				if (braintrustHandler) {
+					braintrustHandler.updateConfiguration({
+						braintrustModelId: newModelId,
+						braintrustModelInfo: newModels[newModelId],
+					})
+				}
+			}
+		}),
+	)
 
 	// Create BraintrustHandler instance
 	try {
@@ -103,7 +136,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Add this to your command registrations
 	context.subscriptions.push(
-		vscode.commands.registerCommand("roo.refreshBraintrustModels", () => {
+		vscode.commands.registerCommand("roo-cline.refreshBraintrustModels", () => {
 			if (sidebarProvider && braintrustHandler) {
 				const models = braintrustHandler.getBraintrustModels()
 				sidebarProvider.postMessageToWebview({

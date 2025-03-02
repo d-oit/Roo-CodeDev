@@ -2,7 +2,6 @@ import React from "react"
 import { useExtensionState } from "../../context/ExtensionStateContext"
 import { ModelPicker } from "./ModelPicker"
 import { vscode } from "../../utils/vscode"
-import { defaultBraintrustConfig } from "../../shared/braintrust-config"
 
 const BraintrustModelPicker: React.FC = () => {
 	const extensionState = useExtensionState()
@@ -21,7 +20,7 @@ const BraintrustModelPicker: React.FC = () => {
 		(extensionState.apiConfiguration?.apiProvider === "braintrust"
 			? extensionState.apiConfiguration?.apiModelId
 			: undefined) ||
-		defaultBraintrustConfig.defaultModelId // Fall back to default model ID
+		""
 
 	return (
 		<ModelPicker

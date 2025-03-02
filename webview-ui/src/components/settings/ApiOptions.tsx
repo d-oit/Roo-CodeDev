@@ -5,7 +5,7 @@ import { VSCodeLink, VSCodeRadio, VSCodeRadioGroup, VSCodeTextField } from "@vsc
 import * as vscodemodels from "vscode"
 
 import { Slider } from "@/components/ui"
-import { defaultBraintrustConfig } from "../../shared/braintrust-config"
+import defaultBraintrustConfig from "../../shared/braintrust-config"
 
 import {
 	ApiConfiguration,

@@ -1368,6 +1368,14 @@ const ApiOptions = ({
 						)}
 					</p>
 
+					<VSCodeTextField
+						value={apiConfiguration?.braintrustProjectId || ""}
+						style={{ width: "100%", marginTop: 10 }}
+						onInput={handleInputChange("braintrustProjectId")}
+						placeholder="Enter Project ID...">
+						<span style={{ fontWeight: 500 }}>Project ID</span>
+					</VSCodeTextField>
+
 					<Checkbox
 						checked={braintrustBaseUrlSelected}
 						onChange={(checked: boolean) => {
@@ -1390,6 +1398,12 @@ const ApiOptions = ({
 					)}
 
 					<BraintrustModelPicker />
+
+					<TemperatureControl
+						value={apiConfiguration?.modelTemperature}
+						onChange={handleInputChange("modelTemperature", noTransform)}
+						maxValue={2}
+					/>
 				</div>
 			)}
 

@@ -73,6 +73,8 @@ export interface ApiHandlerOptions {
 	braintrustApiKey?: string
 	braintrustBaseUrl?: string
 	braintrustProjectId?: string
+	braintrustModelId?: string
+	braintrustModelInfo?: ModelInfo
 }
 
 export type ApiConfiguration = ApiHandlerOptions & {
@@ -777,10 +779,6 @@ export const unboundDefaultModelInfo: ModelInfo = {
 	cacheReadsPrice: 0.3,
 }
 
-// Constants for Braintrust configuration
-export const BRAINTRUST_BASE_URL = "https://api.braintrust.dev"
-export const BRAINTRUST_DEFAULT_TEMPERATURE = 0
-
 // Types for Braintrust models - keep it flexible since models are defined in package.json
 export type BraintrustModelId = string
 
@@ -789,16 +787,10 @@ export interface BraintrustConfig {
 	models: Record<string, ModelInfo>
 }
 
-export const DEFAULT_BRAINTRUST_CONFIG: BraintrustConfig = {
-	defaultModelId: "",
-	models: {},
-}
-
 export function getBraintrustConfig(config?: any): BraintrustConfig {
-	if (!config) return DEFAULT_BRAINTRUST_CONFIG
+	if (!config) return { defaultModelId: "", models: {} }
 	return (config.get?.("braintrustConfig") ??
-		config.braintrustConfig ??
-		DEFAULT_BRAINTRUST_CONFIG) as BraintrustConfig
+		config.braintrustConfig ?? { defaultModelId: "", models: {} }) as BraintrustConfig
 }
 
 // Export getters for default model information

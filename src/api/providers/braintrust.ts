@@ -1,88 +1,80 @@
 import * as vscode from "vscode"
 import OpenAI from "openai"
 import { Anthropic } from "@anthropic-ai/sdk"
-import { initLogger, wrapOpenAI, wrapTraced } from "braintrust"
+import { Braintrust } from "@braintrustdata/braintrust-api-js"
 import { ApiHandler, SingleCompletionHandler } from "../"
-import { ApiHandlerOptions, BRAINTRUST_BASE_URL, BRAINTRUST_DEFAULT_TEMPERATURE, ModelInfo } from "../../shared/api"
+import { ApiHandlerOptions, ModelInfo } from "../../shared/api"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { ApiStream, ApiStreamTextChunk, ApiStreamUsageChunk } from "../transform/stream"
 import { logger } from "../../utils/logging"
 
 const MODEL_CHECK_INTERVAL = 60000 // 1 minute
+const DEFAULT_TEMPERATURE = 0
 
 export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 	private options: ApiHandlerOptions
 	private client!: OpenAI
-	private braintrustLogger!: ReturnType<typeof initLogger>
-	private wrappedClient!: OpenAI
+	private braintrustClient!: Braintrust
 	private cachedModel: { id: string; info: ModelInfo } | null = null
 	private cachedModelId: string | null = null
 	private modelCheckInterval?: NodeJS.Timeout
-	private handlerLogger = logger.child({ ctx: "BraintrustHandler" })
-	private outputChannel!: vscode.OutputChannel
-	private static sharedOutputChannel: vscode.OutputChannel | undefined
-	private enableDebugOutput: boolean = false
-	private logConversations: boolean = false
-	private logQueue: string[] = []
-	private logTimeout: NodeJS.Timeout | null = null
+	private static sharedOutputChannel?: vscode.OutputChannel
+	private outputChannel?: vscode.OutputChannel
+	private enableDebugOutput: boolean
+	private logConversations: boolean
 	private readonly LOG_BATCH_SIZE = 10
-	private readonly LOG_DEBOUNCE_MS = 100
+	private readonly LOG_DEBOUNCE_MS = 1000
+	private logQueue: string[] = []
+	private logTimeout?: NodeJS.Timeout
 
 	constructor(options: ApiHandlerOptions) {
 		this.options = options
-		const baseURL = options.braintrustBaseUrl || BRAINTRUST_BASE_URL
+		this.enableDebugOutput = options.enableDebugOutput ?? false
+		this.logConversations = options.logConversations ?? false
 
 		if (!options.braintrustApiKey) {
 			throw new Error("Braintrust API key is required")
 		}
 
-		// Initialize debug configuration
-		const debugConfig = vscode.workspace.getConfiguration("roo")
-		this.enableDebugOutput = debugConfig.get<boolean>("braintrust-debug", false)
-		this.logConversations = debugConfig.get<boolean>("braintrust-conversation", false)
-
-		// Only create and use the output channel if debugging or conversation logging is enabled
-		if (this.enableDebugOutput || this.logConversations) {
-			if (!BraintrustHandler.sharedOutputChannel) {
-				BraintrustHandler.sharedOutputChannel = vscode.window.createOutputChannel("Roo Code Braintrust")
-			}
-			this.outputChannel = BraintrustHandler.sharedOutputChannel
-
-			this.logInfo("Braintrust Handler initialized")
-			this.logInfo(`Debug output ${this.enableDebugOutput ? "enabled" : "disabled"}`)
-			this.logInfo(`Conversation logging ${this.logConversations ? "enabled" : "disabled"}`)
+		if (!options.braintrustProjectId) {
+			throw new Error("Braintrust Project ID is required")
 		}
 
-		this.handlerLogger.info("Initializing Braintrust handler", {
-			baseURL,
+		const baseURL = options.braintrustBaseUrl || "https://api.braintrustdata.com"
+
+		// Initialize Braintrust client
+		this.braintrustClient = new Braintrust({
+			apiKey: options.braintrustApiKey,
 			projectId: options.braintrustProjectId,
 		})
 
-		// Initialize with OpenAI SDK for API compatibility
+		// Initialize OpenAI client for API compatibility
 		this.client = new OpenAI({
 			apiKey: options.braintrustApiKey,
-			baseURL: `${baseURL}/v1`, // OpenAI SDK expects /v1 endpoint
+			baseURL: `${baseURL}/v1`,
 			defaultHeaders: {
-				"X-Project-Id": options.braintrustProjectId || "",
+				"X-Project-Id": options.braintrustProjectId,
 			},
 		})
 
-		// Initialize Braintrust logging
-		this.braintrustLogger = initLogger({
-			apiKey: options.braintrustApiKey,
-			projectId: options.braintrustProjectId || undefined,
-		})
-
-		// Wrap the OpenAI client for Braintrust logging
-		this.wrappedClient = wrapOpenAI(this.client)
-
-		// Start model availability checking
 		this.startModelAvailabilityCheck()
+	}
+
+	private logDebug(message: string): void {
+		if (!this.enableDebugOutput) return
+		this.log(`[DEBUG] ${message}`)
+	}
+
+	private logInfo(message: string): void {
+		this.log(`[INFO] ${message}`)
+	}
+
+	private logError(message: string): void {
+		this.log(`[ERROR] ${message}`)
 	}
 
 	private log(message: string): void {
 		if ((!this.enableDebugOutput && !this.logConversations) || !this.outputChannel) return
-
 		this.logQueue.push(message)
 
 		if (this.logQueue.length >= this.LOG_BATCH_SIZE) {
@@ -100,104 +92,15 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 	}
 
 	private flushLogs(): void {
-		if (this.logQueue.length === 0 || !this.outputChannel) {
-			return
-		}
+		if (!this.outputChannel || this.logQueue.length === 0) return
 
-		const message = this.logQueue.join("\n")
-		this.outputChannel.appendLine(message)
-
+		const logs = this.logQueue.join("\n")
+		this.outputChannel.appendLine(logs)
 		this.logQueue = []
-		if (this.logTimeout) {
-			clearTimeout(this.logTimeout)
-			this.logTimeout = null
-		}
-	}
-
-	private logInfo(message: string): void {
-		if (!this.logConversations || !this.outputChannel) return
-		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
-		this.log(`[${timestamp}] INFO: ${message}`)
-	}
-
-	private logError(message: string): void {
-		if (!this.outputChannel) return
-		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
-		this.log(`[${timestamp}] ERROR: ${message}`)
-	}
-
-	private logDebug(message: string): void {
-		if (!this.enableDebugOutput || !this.outputChannel) return
-		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
-		this.log(`[${timestamp}] DEBUG: ${message}`)
-	}
-
-	private logWarning(message: string): void {
-		if (!this.outputChannel) return
-		const timestamp = new Date().toISOString().replace("T", " ").substring(0, 19)
-		this.log(`[${timestamp}] WARNING: ${message}`)
-	}
-
-	private async isModelAvailable(modelId: string): Promise<boolean> {
-		this.logDebug(`Checking availability for model: ${modelId}`)
-
-		const models = this.getBraintrustModels()
-		const available = modelId in models
-
-		if (!available) {
-			this.logWarning(`Model ${modelId} not found in available models`)
-			this.logDebug(`Available models: ${Object.keys(models).join(", ")}`)
-		} else {
-			this.logDebug(`Model ${modelId} found with config: ${JSON.stringify(models[modelId])}`)
-		}
-
-		return available
-	}
-
-	startModelAvailabilityCheck(intervalMs: number = MODEL_CHECK_INTERVAL): void {
-		// Clear any existing interval
-		this.stopModelAvailabilityCheck()
-
-		this.logDebug(`Starting model availability check with interval ${intervalMs}ms`)
-
-		// Set up new interval
-		this.modelCheckInterval = setInterval(async () => {
-			if (!this.cachedModel || !this.cachedModelId) return
-
-			try {
-				const isAvailable = await this.isModelAvailable(this.cachedModelId)
-				if (!isAvailable) {
-					this.logWarning(`Model no longer available, refreshing cache: modelId=${this.cachedModelId}`)
-					await this.refreshModelCache()
-				}
-			} catch (error) {
-				this.logError(
-					`Error in model availability check: error=${error instanceof Error ? error.message : "Unknown error"}, modelId=${this.cachedModelId}`,
-				)
-			}
-		}, intervalMs)
-	}
-
-	stopModelAvailabilityCheck(): void {
-		if (this.modelCheckInterval) {
-			this.logDebug("Stopping model availability check")
-			clearInterval(this.modelCheckInterval)
-			this.modelCheckInterval = undefined
-		}
-	}
-
-	private async refreshModelCache(): Promise<void> {
-		this.logDebug("Refreshing model cache")
-		// Clear the cached model
-		this.cachedModel = null
-		this.cachedModelId = null
-
-		// Force a new model fetch
-		await this.getModel()
 	}
 
 	async *createMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream {
-		const model = this.getModel()
+		const model = await this.getModel()
 		this.logDebug(`Creating message stream with model ${model.id}`)
 
 		if (this.logConversations) {
@@ -208,144 +111,127 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 			})
 		}
 
-		const openAiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-			{ role: "system", content: systemPrompt },
-			...convertToOpenAiMessages(messages),
-		]
+		const openAiMessages = [{ role: "system", content: systemPrompt }, ...convertToOpenAiMessages(messages)]
 
 		try {
-			// Use wrapped client for automatic logging
-			const stream = await this.wrappedClient.chat.completions.create({
+			const stream = await this.client.chat.completions.create({
 				model: model.id,
 				messages: openAiMessages,
-				temperature: this.options.modelTemperature ?? BRAINTRUST_DEFAULT_TEMPERATURE,
+				temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
 				stream: true,
 			})
 
+			// Start Braintrust logging
+			const experiment = await this.braintrustClient.startExperiment({
+				model: model.id,
+				messages: openAiMessages,
+				temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
+			})
+
 			for await (const chunk of stream) {
-				const content = chunk.choices[0]?.delta?.content
+				const content = chunk.choices[0]?.delta?.content || ""
 				if (content) {
-					yield { type: "text", text: content } as ApiStreamTextChunk
-				}
-
-				if (chunk.usage) {
-					this.logDebug(
-						`Stream usage stats: inputTokens=${chunk.usage.prompt_tokens}, outputTokens=${chunk.usage.completion_tokens}`,
-					)
-					this.handlerLogger.debug("Stream usage stats", {
-						inputTokens: chunk.usage.prompt_tokens,
-						outputTokens: chunk.usage.completion_tokens,
-					})
-
-					yield {
-						type: "usage",
-						inputTokens: chunk.usage.prompt_tokens,
-						outputTokens: chunk.usage.completion_tokens,
-					} as ApiStreamUsageChunk
+					yield new ApiStreamTextChunk(content)
 				}
 			}
+
+			// Log completion to Braintrust
+			await experiment.log({
+				output: stream.choices[0]?.message?.content || "",
+				metrics: {
+					tokens: stream.usage?.total_tokens || 0,
+				},
+			})
 		} catch (error) {
-			this.logError(
-				`Error creating message stream: error=${error instanceof Error ? error.message : "Unknown error"}, modelId=${model.id}`,
-			)
+			this.logError(`Error creating message: ${error instanceof Error ? error.message : "Unknown error"}`)
 			throw error
 		}
 	}
 
 	async completePrompt(prompt: string): Promise<string> {
-		const model = this.getModel()
+		const model = await this.getModel()
 		this.logDebug(`Completing prompt with model ${model.id}`)
 
 		try {
-			// Wrap the completion call with Braintrust logging
-			const completion = wrapTraced(
-				async () => {
-					const response = await this.wrappedClient.chat.completions.create({
-						model: model.id,
-						messages: [{ role: "user", content: prompt }],
-						temperature: this.options.modelTemperature ?? BRAINTRUST_DEFAULT_TEMPERATURE,
-						stream: false,
-					})
-					return response.choices[0]?.message?.content || ""
-				},
-				{
-					name: "completePrompt",
-				},
-			)
+			const response = await this.client.chat.completions.create({
+				model: model.id,
+				messages: [{ role: "user", content: prompt }],
+				temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
+				stream: false,
+			})
 
-			return await completion()
+			// Log to Braintrust
+			const experiment = await this.braintrustClient.startExperiment({
+				model: model.id,
+				messages: [{ role: "user", content: prompt }],
+				temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
+			})
+
+			await experiment.log({
+				output: response.choices[0]?.message?.content || "",
+				metrics: {
+					tokens: response.usage?.total_tokens || 0,
+				},
+			})
+
+			return response.choices[0]?.message?.content || ""
 		} catch (error) {
-			this.logError(
-				`Error completing prompt: error=${error instanceof Error ? error.message : "Unknown error"}, modelId=${model.id}`,
-			)
+			this.logError(`Error completing prompt: ${error instanceof Error ? error.message : "Unknown error"}`)
 			throw error
 		}
 	}
 
-	public getBraintrustModels(): Record<string, ModelInfo> {
-		// Get configuration from roo-cline settings
-		const config = vscode.workspace.getConfiguration("roo-cline")
-		const braintrustConfig = (config.get("braintrustConfig") as {
-			defaultModelId?: string
-			models?: Record<string, ModelInfo>
-		}) || { models: {} }
-
-		this.logDebug(`Loaded Braintrust config: ${JSON.stringify(braintrustConfig)}`)
-
-		// Return models from config, or empty object if none defined
-		const models = braintrustConfig.models || {}
-
-		if (Object.keys(models).length === 0) {
-			this.logWarning("No Braintrust models configured")
-		} else {
-			this.logDebug(`Available models: ${Object.keys(models).join(", ")}`)
-		}
-
-		return models
-	}
-
 	getModel(): { id: string; info: ModelInfo } {
-		this.logDebug("Getting model configuration")
-
-		const modelId = this.options.apiModelId
-		if (!modelId) {
-			const error = "No model ID specified for Braintrust"
-			this.logError(error)
-			throw new Error(error)
-		}
-
-		this.logDebug(`Requested model ID: ${modelId}`)
-
-		// Return cached model if available and valid
-		if (this.cachedModel && this.cachedModelId === modelId) {
-			this.logDebug(`Using cached model configuration for ${modelId}`)
+		if (this.cachedModel) {
 			return this.cachedModel
 		}
 
-		const models = this.getBraintrustModels()
-		const availableModels = Object.keys(models)
-		this.logDebug(`Available models: ${availableModels.join(", ")}`)
+		const config = vscode.workspace.getConfiguration("roo-cline")
+		const braintrustConfig = config.get<{
+			models: Record<string, ModelInfo>
+		}>("braintrustConfig")
 
-		const modelInfo = models[modelId]
-		if (!modelInfo) {
-			const error = `Model ${modelId} not found in Braintrust configuration. Available models: ${availableModels.join(", ")}`
-			this.logError(error)
-			throw new Error(error)
+		if (!braintrustConfig?.models) {
+			throw new Error("No Braintrust models configured")
 		}
 
-		this.logDebug(`Found model configuration: ${JSON.stringify(modelInfo)}`)
+		const modelId = this.options.apiModelId || Object.keys(braintrustConfig.models)[0]
+		if (!modelId) {
+			throw new Error("No model ID specified")
+		}
 
-		// Cache the model configuration
+		const modelInfo = braintrustConfig.models[modelId]
+		if (!modelInfo) {
+			throw new Error(`Model ${modelId} not found in configuration`)
+		}
+
 		this.cachedModel = { id: modelId, info: modelInfo }
-		this.cachedModelId = modelId
-		this.logDebug(`Cached model configuration for ${modelId}`)
-
 		return this.cachedModel
+	}
+
+	private startModelAvailabilityCheck(): void {
+		this.modelCheckInterval = setInterval(() => {
+			this.checkModelAvailability()
+		}, MODEL_CHECK_INTERVAL)
+	}
+
+	private async checkModelAvailability(): Promise<void> {
+		try {
+			const model = this.getModel()
+			this.logDebug(`Checking availability of model ${model.id}`)
+			// Implement model availability check if needed
+		} catch (error) {
+			this.logError(
+				`Error checking model availability: ${error instanceof Error ? error.message : "Unknown error"}`,
+			)
+		}
 	}
 
 	dispose(): void {
 		this.logDebug("Disposing handler")
 		this.flushLogs()
-		this.stopModelAvailabilityCheck()
+		if (this.modelCheckInterval) {
+			clearInterval(this.modelCheckInterval)
+		}
 	}
 }

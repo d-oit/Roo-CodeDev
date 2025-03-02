@@ -104,7 +104,7 @@ export function activate(context: vscode.ExtensionContext) {
 	// Add this to your command registrations
 	context.subscriptions.push(
 		vscode.commands.registerCommand("roo.refreshBraintrustModels", () => {
-			if (sidebarProvider) {
+			if (sidebarProvider && braintrustHandler) {
 				const models = braintrustHandler.getBraintrustModels()
 				sidebarProvider.postMessageToWebview({
 					type: "braintrustModels",

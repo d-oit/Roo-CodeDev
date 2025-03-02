@@ -115,8 +115,7 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 				{ role: "system", content: systemPrompt } as OpenAI.Chat.ChatCompletionSystemMessageParam,
 				...convertToOpenAiMessages(messages),
 			]
-
-			// Create experiment and logger for tracking
+			// Create experiment and span for tracking
 			const experiment = await this.braintrustClient.experiments.create({
 				name: "Chat Completion",
 				project_id: this.options.braintrustProjectId!,
@@ -125,17 +124,6 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 					messages: allMessages,
 					temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
 					type: "streaming",
-				},
-			})
-
-			const logger = this.braintrustClient.logger({
-				experimentName: experiment.name,
-			})
-
-			// Log the input
-			await logger.log({
-				inputs: {
-					messages: allMessages,
 				},
 			})
 
@@ -158,13 +146,28 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 				}
 			}
 
-			// Log another experiment with the results
+			// Log experiment results
 			await this.braintrustClient.experiments.create({
 				name: "Chat Completion Results",
 				project_id: this.options.braintrustProjectId!,
 				metadata: {
 					completion: fullResponse,
-					completion_tokens: Math.ceil(fullResponse.length / 4), // Approximate token count
+					completion_tokens: Math.ceil(fullResponse.length / 4),
+					parent_experiment: experiment.name,
+				},
+			})
+
+			// Log LLM metrics as a separate experiment
+			await this.braintrustClient.experiments.create({
+				name: "LLM Call Metrics",
+				project_id: this.options.braintrustProjectId!,
+				metadata: {
+					type: "llm_call",
+					model: model.id,
+					input_messages: allMessages,
+					output_completion: fullResponse,
+					completion_tokens: Math.ceil(fullResponse.length / 4),
+					temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
 					parent_experiment: experiment.name,
 				},
 			})
@@ -207,8 +210,24 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 				project_id: this.options.braintrustProjectId!,
 				metadata: {
 					completion: output,
-					completion_tokens: Math.ceil(output.length / 4), // Approximate token count
+					completion_tokens: Math.ceil(output.length / 4),
 					total_tokens: response.usage?.total_tokens,
+					parent_experiment: experiment.name,
+				},
+			})
+
+			// Log LLM metrics as a separate experiment
+			await this.braintrustClient.experiments.create({
+				name: "LLM Call Metrics",
+				project_id: this.options.braintrustProjectId!,
+				metadata: {
+					type: "llm_call",
+					model: model.id,
+					input_messages: messages,
+					output_completion: output,
+					completion_tokens: Math.ceil(output.length / 4),
+					total_tokens: response.usage?.total_tokens,
+					temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
 					parent_experiment: experiment.name,
 				},
 			})

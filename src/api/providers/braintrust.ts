@@ -3,7 +3,8 @@ import OpenAI from "openai"
 import { Anthropic } from "@anthropic-ai/sdk"
 import { Braintrust } from "@braintrust/api"
 import { ApiHandler, SingleCompletionHandler } from "../"
-import { ApiHandlerOptions, ModelInfo, getBraintrustConfig } from "../../shared/api"
+import { ApiHandlerOptions, ModelInfo } from "../../shared/api"
+import { BraintrustConfig } from "../../shared/api-types"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { ApiStream } from "../transform/stream"
 import { logger } from "../../utils/logging"
@@ -214,20 +215,22 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 		}
 
 		const config = vscode.workspace.getConfiguration("roo-cline")
-		const braintrustConfig = getBraintrustConfig(config)
+		// Get model configuration directly from VS Code settings
+		const braintrustConfig = config.get<BraintrustConfig>("braintrustConfig")
 
+		// Use settings-managed models
 		if (!braintrustConfig?.models) {
-			throw new Error("No Braintrust models configured")
+			throw new Error("No Braintrust models configured in VS Code settings")
 		}
 
 		const modelId = this.options.apiModelId || braintrustConfig.defaultModelId
 		if (!modelId) {
-			throw new Error("No model ID specified")
+			throw new Error("No model ID specified in settings")
 		}
 
 		const modelInfo = braintrustConfig.models[modelId]
 		if (!modelInfo) {
-			throw new Error(`Model ${modelId} not found in configuration`)
+			throw new Error(`Model ${modelId} not found in VS Code settings configuration`)
 		}
 
 		this.cachedModel = { id: modelId, info: modelInfo }
@@ -236,8 +239,8 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 
 	getBraintrustModels(): Record<string, ModelInfo> {
 		const config = vscode.workspace.getConfiguration("roo-cline")
-		const braintrustConfig = getBraintrustConfig(config)
-		return braintrustConfig.models || {}
+		const braintrustConfig = config.get<BraintrustConfig>("braintrustConfig")
+		return braintrustConfig?.models || {}
 	}
 
 	private startModelAvailabilityCheck(): void {

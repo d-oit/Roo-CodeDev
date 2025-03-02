@@ -1,27 +1,27 @@
 import * as vscode from "vscode"
 import OpenAI from "openai"
 import { Anthropic } from "@anthropic-ai/sdk"
-import { Braintrust } from "@braintrustdata/braintrust-api-js"
+import { Braintrust } from "@braintrust/api"
 import { ApiHandler, SingleCompletionHandler } from "../"
-import { ApiHandlerOptions, ModelInfo } from "../../shared/api"
+import { ApiHandlerOptions, ModelInfo, getBraintrustConfig } from "../../shared/api"
 import { convertToOpenAiMessages } from "../transform/openai-format"
-import { ApiStream, ApiStreamTextChunk, ApiStreamUsageChunk } from "../transform/stream"
+import { ApiStream } from "../transform/stream"
 import { logger } from "../../utils/logging"
 
 const MODEL_CHECK_INTERVAL = 60000 // 1 minute
 const DEFAULT_TEMPERATURE = 0
+const DEFAULT_BASE_URL = "https://api.braintrustdata.com"
 
 export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
-	private options: ApiHandlerOptions
-	private client!: OpenAI
-	private braintrustClient!: Braintrust
+	private readonly client: OpenAI
+	private readonly braintrustClient: Braintrust
+	private readonly options: ApiHandlerOptions
 	private cachedModel: { id: string; info: ModelInfo } | null = null
-	private cachedModelId: string | null = null
 	private modelCheckInterval?: NodeJS.Timeout
 	private static sharedOutputChannel?: vscode.OutputChannel
 	private outputChannel?: vscode.OutputChannel
-	private enableDebugOutput: boolean
-	private logConversations: boolean
+	private readonly enableDebugOutput: boolean
+	private readonly logConversations: boolean
 	private readonly LOG_BATCH_SIZE = 10
 	private readonly LOG_DEBOUNCE_MS = 1000
 	private logQueue: string[] = []
@@ -29,8 +29,11 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 
 	constructor(options: ApiHandlerOptions) {
 		this.options = options
-		this.enableDebugOutput = options.enableDebugOutput ?? false
-		this.logConversations = options.logConversations ?? false
+
+		// Get debug settings from workspace configuration
+		const debugConfig = vscode.workspace.getConfiguration("roo-cline.debug")
+		this.enableDebugOutput = debugConfig.get("braintrust") ?? false
+		this.logConversations = debugConfig.get("braintrust-conversation") ?? false
 
 		if (!options.braintrustApiKey) {
 			throw new Error("Braintrust API key is required")
@@ -40,21 +43,15 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 			throw new Error("Braintrust Project ID is required")
 		}
 
-		const baseURL = options.braintrustBaseUrl || "https://api.braintrustdata.com"
-
-		// Initialize Braintrust client
-		this.braintrustClient = new Braintrust({
-			apiKey: options.braintrustApiKey,
-			projectId: options.braintrustProjectId,
-		})
-
 		// Initialize OpenAI client for API compatibility
 		this.client = new OpenAI({
 			apiKey: options.braintrustApiKey,
-			baseURL: `${baseURL}/v1`,
-			defaultHeaders: {
-				"X-Project-Id": options.braintrustProjectId,
-			},
+			baseURL: `${options.braintrustBaseUrl || DEFAULT_BASE_URL}/v1`,
+		})
+
+		// Initialize Braintrust client for experiment logging
+		this.braintrustClient = new Braintrust({
+			apiKey: options.braintrustApiKey,
 		})
 
 		this.startModelAvailabilityCheck()
@@ -111,35 +108,52 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 			})
 		}
 
-		const openAiMessages = [{ role: "system", content: systemPrompt }, ...convertToOpenAiMessages(messages)]
-
 		try {
-			const stream = await this.client.chat.completions.create({
+			// Convert messages to OpenAI format
+			const allMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+				{ role: "system", content: systemPrompt } as OpenAI.Chat.ChatCompletionSystemMessageParam,
+				...convertToOpenAiMessages(messages),
+			]
+
+			// Create experiment for tracking
+			const experiment = await this.braintrustClient.experiments.create({
+				name: "Chat Completion",
+				project_id: this.options.braintrustProjectId!,
+				metadata: {
+					model: model.id,
+					messages: allMessages,
+					temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
+					type: "streaming",
+				},
+			})
+
+			// Create completion stream
+			const streamResponse = await this.client.chat.completions.create({
 				model: model.id,
-				messages: openAiMessages,
+				messages: allMessages,
 				temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
 				stream: true,
 			})
 
-			// Start Braintrust logging
-			const experiment = await this.braintrustClient.startExperiment({
-				model: model.id,
-				messages: openAiMessages,
-				temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
-			})
+			let fullResponse = ""
 
-			for await (const chunk of stream) {
+			// Stream the response
+			for await (const chunk of streamResponse) {
 				const content = chunk.choices[0]?.delta?.content || ""
 				if (content) {
-					yield new ApiStreamTextChunk(content)
+					fullResponse += content
+					yield { type: "text", text: content }
 				}
 			}
 
-			// Log completion to Braintrust
-			await experiment.log({
-				output: stream.choices[0]?.message?.content || "",
-				metrics: {
-					tokens: stream.usage?.total_tokens || 0,
+			// Log another experiment with the results
+			await this.braintrustClient.experiments.create({
+				name: "Chat Completion Results",
+				project_id: this.options.braintrustProjectId!,
+				metadata: {
+					completion: fullResponse,
+					completion_tokens: Math.ceil(fullResponse.length / 4), // Approximate token count
+					parent_experiment: experiment.name,
 				},
 			})
 		} catch (error) {
@@ -153,28 +167,41 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 		this.logDebug(`Completing prompt with model ${model.id}`)
 
 		try {
+			const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [{ role: "user", content: prompt }]
+
+			// Create experiment for tracking
+			const experiment = await this.braintrustClient.experiments.create({
+				name: "Prompt Completion",
+				project_id: this.options.braintrustProjectId!,
+				metadata: {
+					model: model.id,
+					messages,
+					temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
+				},
+			})
+
 			const response = await this.client.chat.completions.create({
 				model: model.id,
-				messages: [{ role: "user", content: prompt }],
+				messages,
 				temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
 				stream: false,
 			})
 
-			// Log to Braintrust
-			const experiment = await this.braintrustClient.startExperiment({
-				model: model.id,
-				messages: [{ role: "user", content: prompt }],
-				temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
-			})
+			const output = response.choices[0]?.message?.content || ""
 
-			await experiment.log({
-				output: response.choices[0]?.message?.content || "",
-				metrics: {
-					tokens: response.usage?.total_tokens || 0,
+			// Log another experiment with the results
+			await this.braintrustClient.experiments.create({
+				name: "Prompt Completion Results",
+				project_id: this.options.braintrustProjectId!,
+				metadata: {
+					completion: output,
+					completion_tokens: Math.ceil(output.length / 4), // Approximate token count
+					total_tokens: response.usage?.total_tokens,
+					parent_experiment: experiment.name,
 				},
 			})
 
-			return response.choices[0]?.message?.content || ""
+			return output
 		} catch (error) {
 			this.logError(`Error completing prompt: ${error instanceof Error ? error.message : "Unknown error"}`)
 			throw error
@@ -187,15 +214,13 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 		}
 
 		const config = vscode.workspace.getConfiguration("roo-cline")
-		const braintrustConfig = config.get<{
-			models: Record<string, ModelInfo>
-		}>("braintrustConfig")
+		const braintrustConfig = getBraintrustConfig(config)
 
 		if (!braintrustConfig?.models) {
 			throw new Error("No Braintrust models configured")
 		}
 
-		const modelId = this.options.apiModelId || Object.keys(braintrustConfig.models)[0]
+		const modelId = this.options.apiModelId || braintrustConfig.defaultModelId
 		if (!modelId) {
 			throw new Error("No model ID specified")
 		}
@@ -207,6 +232,12 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 
 		this.cachedModel = { id: modelId, info: modelInfo }
 		return this.cachedModel
+	}
+
+	getBraintrustModels(): Record<string, ModelInfo> {
+		const config = vscode.workspace.getConfiguration("roo-cline")
+		const braintrustConfig = getBraintrustConfig(config)
+		return braintrustConfig.models || {}
 	}
 
 	private startModelAvailabilityCheck(): void {

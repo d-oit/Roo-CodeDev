@@ -116,7 +116,7 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 				...convertToOpenAiMessages(messages),
 			]
 
-			// Create experiment for tracking
+			// Create experiment and logger for tracking
 			const experiment = await this.braintrustClient.experiments.create({
 				name: "Chat Completion",
 				project_id: this.options.braintrustProjectId!,
@@ -125,6 +125,17 @@ export class BraintrustHandler implements ApiHandler, SingleCompletionHandler {
 					messages: allMessages,
 					temperature: this.options.modelTemperature ?? DEFAULT_TEMPERATURE,
 					type: "streaming",
+				},
+			})
+
+			const logger = this.braintrustClient.logger({
+				experimentName: experiment.name,
+			})
+
+			// Log the input
+			await logger.log({
+				inputs: {
+					messages: allMessages,
 				},
 			})
 

@@ -25,20 +25,20 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 	private currentRequestCancellation: vscode.CancellationTokenSource | null
 
 	private log(message: string, data?: any) {
-		console.log("Log method called:", message) // Debug line
 		const config = vscode.workspace.getConfiguration("roo-cline")
-		const isDebugEnabled = config.get("enableDebugOutput")
-		console.log("Debug output enabled:", isDebugEnabled) // Debug line
-
 		if (config.get("enableDebugOutput")) {
 			if (!VsCodeLmHandler.outputChannel) {
-				console.log("Creating output channel") // Debug line
 				VsCodeLmHandler.outputChannel = vscode.window.createOutputChannel("Roo Code LM API")
 			}
 			const timestamp = new Date().toISOString()
 			let logMessage = `[${timestamp}] ${message}`
 			if (data !== undefined) {
-				logMessage += "\n" + JSON.stringify(data, null, 2)
+				if (typeof data === "object") {
+					// Pretty print objects with 2-space indentation
+					logMessage += "\n" + JSON.stringify(data, null, 2)
+				} else {
+					logMessage += "\n" + data
+				}
 			}
 			VsCodeLmHandler.outputChannel.appendLine(logMessage)
 			VsCodeLmHandler.outputChannel.show(true)
@@ -50,28 +50,49 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 		this.options = options
 		this.client = null
 		this.disposable = null
-		this.currentRequestCancellation = new vscode.CancellationTokenSource() // Initialize in constructor
+		this.currentRequestCancellation = new vscode.CancellationTokenSource()
+
+		this.log("Initializing VS Code LM Handler", {
+			options: {
+				apiModelId: options.apiModelId,
+				modelMaxTokens: options.modelMaxTokens,
+				modelTemperature: options.modelTemperature,
+				vsCodeLmModelSelector: options.vsCodeLmModelSelector,
+			},
+		})
 
 		// Initialize caches
 		this.modelCache = new LRU({
-			max: 10, // Maximum number of models to cache
-			ttl: 1000 * 60 * 5, // 5 minutes TTL
+			max: 10,
+			ttl: 1000 * 60 * 5,
 		})
-
 		this.tokenCache = new LRU({
-			max: 1000, // Maximum number of token counts to cache
-			ttl: 1000 * 60 * 60, // 1 hour TTL
+			max: 1000,
+			ttl: 1000 * 60 * 60,
+		})
+		this.log("Cache initialized", {
+			modelCache: { max: 10, ttl: "5 minutes" },
+			tokenCache: { max: 1000, ttl: "1 hour" },
 		})
 
 		try {
 			this.setupConfigurationListener()
 			this.logConfiguration()
-			// Initialize client immediately
 			this.getClient().catch((error) => {
-				this.log("Failed to initialize client", { error: error.message })
+				this.log("Failed to initialize client", {
+					error: error.message,
+					stack: error.stack,
+				})
 			})
-			this.log(`VS Code LM Handler initialized at ${new Date().toISOString()}`)
+			this.log("VS Code LM Handler initialization completed", {
+				timestamp: new Date().toISOString(),
+				status: "ready",
+			})
 		} catch (error) {
+			this.log("Fatal error during initialization", {
+				error: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
+			})
 			this.handleFatalError(error)
 		}
 	}

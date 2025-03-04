@@ -756,6 +756,11 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			}
 
 			const endTime = Date.now()
+
+			// Count tokens in the accumulated text
+			const totalOutputTokens: number = await this.internalCountTokens(accumulatedText)
+
+			// Log metrics including token counts
 			this.log("METRICS", "Stream processing completed", {
 				metrics: {
 					totalTimeMs: endTime - startTime,
@@ -765,8 +770,17 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 					totalLength: totalTextLength,
 					averageChunkSize: Math.round(totalTextLength / textChunkCount),
 					chunksPerSecond: Math.round((textChunkCount + toolCallCount) / ((endTime - sendTime) / 1000)),
+					inputTokens: totalInputTokens,
+					outputTokens: totalOutputTokens,
 				},
 			})
+
+			// Yield usage information
+			yield {
+				type: "usage",
+				inputTokens: totalInputTokens,
+				outputTokens: totalOutputTokens,
+			}
 		} catch (error) {
 			this.log("ERROR", "Error in message stream", {
 				error: error instanceof Error ? error.message : String(error),

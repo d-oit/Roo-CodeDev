@@ -1,6 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import * as vscode from "vscode"
-
+import LRU from "lru-cache"
 import { SingleCompletionHandler } from "../"
 import { calculateApiCost } from "../../utils/cost"
 import { ApiStream } from "../transform/stream"
@@ -12,63 +12,114 @@ import { BaseProvider } from "./base-provider"
 /**
  * Handles interaction with VS Code's Language Model API for chat-based operations.
  * This handler extends BaseProvider to provide VS Code LM specific functionality.
- *
- * @extends {BaseProvider}
- *
- * @remarks
- * The handler manages a VS Code language model chat client and provides methods to:
- * - Create and manage chat client instances
- * - Stream messages using VS Code's Language Model API
- * - Retrieve model information
- *
- * @example
- * ```typescript
- * const options = {
- *   vsCodeLmModelSelector: { vendor: "copilot", family: "gpt-4" }
- * };
- * const handler = new VsCodeLmHandler(options);
- *
- * // Stream a conversation
- * const systemPrompt = "You are a helpful assistant";
- * const messages = [{ role: "user", content: "Hello!" }];
- * for await (const chunk of handler.createMessage(systemPrompt, messages)) {
- *   console.log(chunk);
- * }
- * ```
  */
 export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHandler {
+	private static readonly MAX_RETRIES = 3
+	private static readonly RETRY_DELAY = 1000 // ms
+	private modelCache: LRU<string, vscode.LanguageModelChat>
+	private tokenCache: LRU<string, number>
+	private static outputChannel: vscode.OutputChannel | undefined = undefined
 	protected options: ApiHandlerOptions
 	private client: vscode.LanguageModelChat | null
 	private disposable: vscode.Disposable | null
 	private currentRequestCancellation: vscode.CancellationTokenSource | null
+
+	private log(message: string, data?: any) {
+		console.log("Log method called:", message) // Debug line
+		const config = vscode.workspace.getConfiguration("roo-cline")
+		const isDebugEnabled = config.get("enableDebugOutput")
+		console.log("Debug output enabled:", isDebugEnabled) // Debug line
+
+		if (config.get("enableDebugOutput")) {
+			if (!VsCodeLmHandler.outputChannel) {
+				console.log("Creating output channel") // Debug line
+				VsCodeLmHandler.outputChannel = vscode.window.createOutputChannel("Roo Code LM API")
+			}
+			const timestamp = new Date().toISOString()
+			let logMessage = `[${timestamp}] ${message}`
+			if (data !== undefined) {
+				logMessage += "\n" + JSON.stringify(data, null, 2)
+			}
+			VsCodeLmHandler.outputChannel.appendLine(logMessage)
+			VsCodeLmHandler.outputChannel.show(true)
+		}
+	}
 
 	constructor(options: ApiHandlerOptions) {
 		super()
 		this.options = options
 		this.client = null
 		this.disposable = null
-		this.currentRequestCancellation = null
+		this.currentRequestCancellation = new vscode.CancellationTokenSource() // Initialize in constructor
+
+		// Initialize caches
+		this.modelCache = new LRU({
+			max: 10, // Maximum number of models to cache
+			ttl: 1000 * 60 * 5, // 5 minutes TTL
+		})
+
+		this.tokenCache = new LRU({
+			max: 1000, // Maximum number of token counts to cache
+			ttl: 1000 * 60 * 60, // 1 hour TTL
+		})
 
 		try {
-			// Listen for model changes and reset client
-			this.disposable = vscode.workspace.onDidChangeConfiguration((event) => {
-				if (event.affectsConfiguration("lm")) {
-					try {
-						this.client = null
-						this.ensureCleanState()
-					} catch (error) {
-						console.error("Error during configuration change cleanup:", error)
-					}
-				}
+			this.setupConfigurationListener()
+			this.logConfiguration()
+			// Initialize client immediately
+			this.getClient().catch((error) => {
+				this.log("Failed to initialize client", { error: error.message })
 			})
+			this.log(`VS Code LM Handler initialized at ${new Date().toISOString()}`)
 		} catch (error) {
-			// Ensure cleanup if constructor fails
-			this.dispose()
-
-			throw new Error(
-				`Roo Code <Language Model API>: Failed to initialize handler: ${error instanceof Error ? error.message : "Unknown error"}`,
-			)
+			this.handleFatalError(error)
 		}
+	}
+
+	private logConfiguration(): void {
+		// Ensure we only log non-undefined values
+		const configToLog = {
+			apiModelId: this.options.apiModelId,
+			modelMaxTokens: this.options.modelMaxTokens,
+			modelTemperature: this.options.modelTemperature,
+			includeMaxTokens: this.options.includeMaxTokens,
+			vsCodeLmModelSelector: this.options.vsCodeLmModelSelector,
+		}
+
+		// Filter out undefined values
+		const cleanConfig = Object.fromEntries(Object.entries(configToLog).filter(([_, v]) => v !== undefined))
+
+		this.log("VS Code LM Handler Configuration", cleanConfig)
+	}
+
+	private setupConfigurationListener(): void {
+		this.disposable = vscode.workspace.onDidChangeConfiguration(this.handleConfigChange.bind(this))
+	}
+
+	private handleConfigChange(event: vscode.ConfigurationChangeEvent): void {
+		if (event.affectsConfiguration("lm")) {
+			this.log("Configuration change detected for LM settings")
+			try {
+				this.log("Clearing client and cache")
+				this.client = null
+				this.modelCache.clear()
+				this.ensureCleanState()
+				this.log("Configuration change handled successfully")
+			} catch (error) {
+				const errorMessage = error instanceof Error ? error.message : String(error)
+				this.log("Error during configuration change", {
+					error: errorMessage,
+					stack: error instanceof Error ? error.stack : undefined,
+				})
+			}
+		}
+	}
+
+	private handleFatalError(error: unknown): never {
+		this.dispose()
+		const errorMessage = error instanceof Error ? error.message : "Unknown error"
+		this.log("Fatal error in VS Code LM Handler", { error: errorMessage })
+		throw new Error(`Roo Code <Language Model API>: Fatal error: ${errorMessage}`)
 	}
 
 	/**
@@ -83,40 +134,147 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 	 * const chatClient = await createClient(selector);
 	 */
 	async createClient(selector: vscode.LanguageModelChatSelector): Promise<vscode.LanguageModelChat> {
+		const selectorKey = stringifyVsCodeLmModelSelector(selector)
+		this.log(`Creating client for selector: ${selectorKey}`, selector)
+
+		// Check cache first
+		const cachedModel = this.modelCache.get(selectorKey)
+		if (cachedModel) {
+			this.log(`Using cached model for selector: ${selectorKey}`, {
+				id: cachedModel.id,
+				vendor: cachedModel.vendor,
+				family: cachedModel.family,
+			})
+			return cachedModel
+		}
+
 		try {
 			const models = await vscode.lm.selectChatModels(selector)
 
-			// Use first available model or create a minimal model object
-			if (models && Array.isArray(models) && models.length > 0) {
-				return models[0]
+			if (models?.length) {
+				this.log(
+					"Available VS Code LM models:",
+					models.map((m) => ({
+						id: m.id,
+						name: m.name,
+						vendor: m.vendor,
+						family: m.family,
+						version: m.version,
+						maxInputTokens: m.maxInputTokens,
+					})),
+				)
+			} else {
+				this.log("No models available for selector", { selector: selectorKey })
 			}
 
-			// Create a minimal model if no models are available
-			return {
-				id: "default-lm",
-				name: "Default Language Model",
-				vendor: "vscode",
-				family: "lm",
-				version: "1.0",
-				maxInputTokens: 8192,
-				sendRequest: async (messages, options, token) => {
-					// Provide a minimal implementation
-					return {
-						stream: (async function* () {
-							yield new vscode.LanguageModelTextPart(
-								"Language model functionality is limited. Please check VS Code configuration.",
-							)
-						})(),
-						text: (async function* () {
-							yield "Language model functionality is limited. Please check VS Code configuration."
-						})(),
-					}
-				},
-				countTokens: async () => 0,
+			if (models && models.length > 0) {
+				const selectedModel = models[0]
+				this.log("Selected VS Code LM model:", {
+					id: selectedModel.id,
+					name: selectedModel.name,
+					vendor: selectedModel.vendor,
+					family: selectedModel.family,
+					version: selectedModel.version,
+					maxInputTokens: selectedModel.maxInputTokens,
+					selector: selectorKey,
+				})
+
+				this.modelCache.set(selectorKey, selectedModel)
+				return selectedModel
 			}
+
+			return await this.createClientWithRetry(selector)
 		} catch (error) {
-			const errorMessage = error instanceof Error ? error.message : "Unknown error"
-			throw new Error(`Roo Code <Language Model API>: Failed to select model: ${errorMessage}`)
+			const errorMessage = error instanceof Error ? error.message : String(error)
+			this.log(`Error creating client for selector: ${selectorKey}`, {
+				error: errorMessage,
+				stack: error instanceof Error ? error.stack : undefined,
+			})
+			return this.createFallbackModel()
+		}
+	}
+
+	private async createClientWithRetry(
+		selector: vscode.LanguageModelChatSelector,
+		attempt = 1,
+	): Promise<vscode.LanguageModelChat> {
+		const selectorStr = stringifyVsCodeLmModelSelector(selector)
+		this.log(`Attempting to create client (attempt ${attempt}/${VsCodeLmHandler.MAX_RETRIES})`, {
+			selector: selectorStr,
+			maxRetries: VsCodeLmHandler.MAX_RETRIES,
+		})
+
+		try {
+			const models = await vscode.lm.selectChatModels(selector)
+			this.log(`Available models for selector ${selectorStr}:`, {
+				modelCount: models?.length ?? 0,
+				models: models?.map((m) => ({
+					id: m.id,
+					name: m.name,
+					vendor: m.vendor,
+					family: m.family,
+				})),
+			})
+
+			if (models?.length > 0) {
+				const selectedModel = models[0]
+				this.log(`Selected model for ${selectorStr}:`, {
+					id: selectedModel.id,
+					name: selectedModel.name,
+					vendor: selectedModel.vendor,
+					family: selectedModel.family,
+					maxInputTokens: selectedModel.maxInputTokens,
+				})
+				return selectedModel
+			}
+
+			throw new Error(`No models available for selector: ${selectorStr}`)
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error)
+			this.log(`Client creation failed (attempt ${attempt})`, {
+				error: errorMessage,
+				selector: selectorStr,
+				stack: error instanceof Error ? error.stack : undefined,
+			})
+
+			if (attempt >= VsCodeLmHandler.MAX_RETRIES) {
+				this.log(`Max retries (${VsCodeLmHandler.MAX_RETRIES}) reached for selector: ${selectorStr}`, {
+					error: errorMessage,
+				})
+				throw error
+			}
+
+			const delayMs = VsCodeLmHandler.RETRY_DELAY * attempt
+			this.log(`Scheduling retry for selector: ${selectorStr}`, {
+				nextAttempt: attempt + 1,
+				delayMs: delayMs,
+			})
+
+			await new Promise((resolve) => setTimeout(resolve, delayMs))
+			return this.createClientWithRetry(selector, attempt + 1)
+		}
+	}
+
+	private createFallbackModel(): vscode.LanguageModelChat {
+		this.log("Creating fallback model")
+		return {
+			id: "default-lm",
+			name: "Default Language Model",
+			vendor: "vscode",
+			family: "lm",
+			version: "1.0",
+			maxInputTokens: 8192,
+			sendRequest: async (messages, options, token) => ({
+				stream: (async function* () {
+					yield new vscode.LanguageModelTextPart(
+						"Language model functionality is limited. Please check VS Code configuration.",
+					)
+				})(),
+				text: (async function* () {
+					yield "Language model functionality is limited. Please check VS Code configuration."
+				})(),
+			}),
+			countTokens: async () => 0,
 		}
 	}
 
@@ -137,6 +295,10 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 	 * Tool calls handling is currently a work in progress.
 	 */
 	dispose(): void {
+		this.log("Disposing VS Code LM Handler")
+		this.modelCache.clear()
+		this.tokenCache.clear()
+
 		if (this.disposable) {
 			this.disposable.dispose()
 		}
@@ -144,6 +306,10 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 		if (this.currentRequestCancellation) {
 			this.currentRequestCancellation.cancel()
 			this.currentRequestCancellation.dispose()
+		}
+
+		if (VsCodeLmHandler.outputChannel) {
+			VsCodeLmHandler.outputChannel.dispose()
 		}
 	}
 
@@ -155,88 +321,104 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 	 * @returns A promise resolving to the token count
 	 */
 	override async countTokens(content: Array<Anthropic.Messages.ContentBlockParam>): Promise<number> {
-		// Convert Anthropic content blocks to a string for VSCode LM token counting
-		let textContent = ""
+		const cacheKey = JSON.stringify(content)
 
-		for (const block of content) {
-			if (block.type === "text") {
-				textContent += block.text || ""
-			} else if (block.type === "image") {
-				// VSCode LM doesn't support images directly, so we'll just use a placeholder
-				textContent += "[IMAGE]"
+		try {
+			// Check cache first
+			const cachedCount = this.tokenCache.get(cacheKey)
+			if (cachedCount !== undefined) {
+				this.log("Using cached token count", { cacheKey })
+				return cachedCount
 			}
-		}
 
-		return this.internalCountTokens(textContent)
+			// Calculate tokens
+			const textContent = this.convertContentToText(content)
+			const count = await this.internalCountTokens(textContent)
+
+			// Cache the result
+			this.tokenCache.set(cacheKey, count)
+			return count
+		} catch (error) {
+			this.log("Token counting failed", { error })
+			return 0
+		}
+	}
+
+	private convertContentToText(content: Array<Anthropic.Messages.ContentBlockParam>): string {
+		return content
+			.map((block) => {
+				if (block.type === "text") return block.text || ""
+				if (block.type === "image") return "[IMAGE]"
+				return ""
+			})
+			.join("")
 	}
 
 	/**
 	 * Private implementation of token counting used internally by VsCodeLmHandler
 	 */
+	private ensureCancellationToken(): vscode.CancellationTokenSource {
+		if (!this.currentRequestCancellation || this.currentRequestCancellation.token.isCancellationRequested) {
+			this.currentRequestCancellation?.dispose()
+			this.currentRequestCancellation = new vscode.CancellationTokenSource()
+		}
+		return this.currentRequestCancellation
+	}
+
 	private async internalCountTokens(text: string | vscode.LanguageModelChatMessage): Promise<number> {
-		// Check for required dependencies
 		if (!this.client) {
-			console.warn("Roo Code <Language Model API>: No client available for token counting")
+			this.log("No client available for token counting")
 			return 0
 		}
 
-		if (!this.currentRequestCancellation) {
-			console.warn("Roo Code <Language Model API>: No cancellation token available for token counting")
-			return 0
-		}
+		const cancellation = this.ensureCancellationToken()
 
-		// Validate input
 		if (!text) {
-			console.debug("Roo Code <Language Model API>: Empty text provided for token counting")
+			this.log("Empty text provided for token counting")
 			return 0
 		}
 
 		try {
-			// Handle different input types
 			let tokenCount: number
 
 			if (typeof text === "string") {
-				tokenCount = await this.client.countTokens(text, this.currentRequestCancellation.token)
+				tokenCount = await this.client.countTokens(text, cancellation.token)
 			} else if (text instanceof vscode.LanguageModelChatMessage) {
-				// For chat messages, ensure we have content
 				if (!text.content || (Array.isArray(text.content) && text.content.length === 0)) {
-					console.debug("Roo Code <Language Model API>: Empty chat message content")
+					this.log("Empty chat message content")
 					return 0
 				}
-				tokenCount = await this.client.countTokens(text, this.currentRequestCancellation.token)
+				tokenCount = await this.client.countTokens(text, cancellation.token)
 			} else {
-				console.warn("Roo Code <Language Model API>: Invalid input type for token counting")
+				this.log("Invalid input type for token counting")
 				return 0
 			}
 
-			// Validate the result
 			if (typeof tokenCount !== "number") {
-				console.warn("Roo Code <Language Model API>: Non-numeric token count received:", tokenCount)
+				this.log("Non-numeric token count received:", tokenCount)
 				return 0
 			}
 
 			if (tokenCount < 0) {
-				console.warn("Roo Code <Language Model API>: Negative token count received:", tokenCount)
+				this.log("Negative token count received:", tokenCount)
 				return 0
 			}
 
 			return tokenCount
 		} catch (error) {
-			// Handle specific error types
 			if (error instanceof vscode.CancellationError) {
-				console.debug("Roo Code <Language Model API>: Token counting cancelled by user")
+				this.log("Token counting cancelled by user")
 				return 0
 			}
 
 			const errorMessage = error instanceof Error ? error.message : "Unknown error"
-			console.warn("Roo Code <Language Model API>: Token counting failed:", errorMessage)
+			this.log("Token counting failed:", errorMessage)
 
-			// Log additional error details if available
 			if (error instanceof Error && error.stack) {
-				console.debug("Token counting error stack:", error.stack)
+				this.log("Token counting error stack:", error.stack)
 			}
 
-			return 0 // Fallback to prevent stream interruption
+			return 0
 		}
 	}
 
@@ -259,27 +441,59 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 		}
 	}
 
-	private async getClient(): Promise<vscode.LanguageModelChat> {
-		if (!this.client) {
-			console.debug("Roo Code <Language Model API>: Getting client with options:", {
-				vsCodeLmModelSelector: this.options.vsCodeLmModelSelector,
-				hasOptions: !!this.options,
-				selectorKeys: this.options.vsCodeLmModelSelector ? Object.keys(this.options.vsCodeLmModelSelector) : [],
-			})
+	private clientInitPromise: Promise<vscode.LanguageModelChat> | null = null
 
-			try {
-				// Use default empty selector if none provided to get all available models
-				const selector = this.options?.vsCodeLmModelSelector || {}
-				console.debug("Roo Code <Language Model API>: Creating client with selector:", selector)
-				this.client = await this.createClient(selector)
-			} catch (error) {
-				const message = error instanceof Error ? error.message : "Unknown error"
-				console.error("Roo Code <Language Model API>: Client creation failed:", message)
-				throw new Error(`Roo Code <Language Model API>: Failed to create client: ${message}`)
-			}
+	private async getClient(): Promise<vscode.LanguageModelChat> {
+		if (this.clientInitPromise) {
+			return this.clientInitPromise
 		}
 
-		return this.client
+		this.clientInitPromise =
+			this.clientInitPromise ||
+			(async () => {
+				if (this.client) {
+					this.log("Using existing client", {
+						id: this.client.id,
+						vendor: this.client.vendor,
+						family: this.client.family,
+					})
+					return this.client
+				}
+
+				this.log("Initializing new client")
+
+				const selector = this.options.vsCodeLmModelSelector ?? {
+					vendor: "copilot",
+					family: "claude-3.5-sonnet",
+				}
+
+				this.log("Initializing client with selector:", {
+					selector: stringifyVsCodeLmModelSelector(selector),
+					selectorDetails: selector,
+				})
+
+				try {
+					this.client = await this.createClient(selector)
+					this.log("Client initialized successfully", {
+						id: this.client.id,
+						vendor: this.client.vendor,
+						family: this.client.family,
+						maxInputTokens: this.client.maxInputTokens,
+					})
+					return this.client
+				} catch (error) {
+					const errorMessage = error instanceof Error ? error.message : String(error)
+					this.log("Client initialization failed", {
+						error: errorMessage,
+						selector: stringifyVsCodeLmModelSelector(selector),
+						stack: error instanceof Error ? error.stack : undefined,
+					})
+					this.clientInitPromise = null
+					throw error
+				}
+			})()
+
+		return this.clientInitPromise
 	}
 
 	private cleanTerminalOutput(text: string): string {
@@ -394,7 +608,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 				if (chunk instanceof vscode.LanguageModelTextPart) {
 					// Validate text part value
 					if (typeof chunk.value !== "string") {
-						console.warn("Roo Code <Language Model API>: Invalid text part value received:", chunk.value)
+						this.log("Invalid text part value received:", chunk.value)
 						continue
 					}
 
@@ -407,18 +621,18 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 					try {
 						// Validate tool call parameters
 						if (!chunk.name || typeof chunk.name !== "string") {
-							console.warn("Roo Code <Language Model API>: Invalid tool name received:", chunk.name)
+							this.log("Invalid tool name received:", chunk.name)
 							continue
 						}
 
 						if (!chunk.callId || typeof chunk.callId !== "string") {
-							console.warn("Roo Code <Language Model API>: Invalid tool callId received:", chunk.callId)
+							this.log("Invalid tool callId received:", chunk.callId)
 							continue
 						}
 
 						// Ensure input is a valid object
 						if (!chunk.input || typeof chunk.input !== "object") {
-							console.warn("Roo Code <Language Model API>: Invalid tool input received:", chunk.input)
+							this.log("Invalid tool input received:", chunk.input)
 							continue
 						}
 
@@ -434,7 +648,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 						accumulatedText += toolCallText
 
 						// Log tool call for debugging
-						console.debug("Roo Code <Language Model API>: Processing tool call:", {
+						this.log("Processing tool call:", {
 							name: chunk.name,
 							callId: chunk.callId,
 							inputSize: JSON.stringify(chunk.input).length,
@@ -445,12 +659,12 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 							text: toolCallText,
 						}
 					} catch (error) {
-						console.error("Roo Code <Language Model API>: Failed to process tool call:", error)
+						this.log("Failed to process tool call:", error)
 						// Continue processing other chunks even if one fails
 						continue
 					}
 				} else {
-					console.warn("Roo Code <Language Model API>: Unknown chunk type received:", chunk)
+					this.log("Unknown chunk type received:", chunk)
 				}
 			}
 
@@ -472,7 +686,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			}
 
 			if (error instanceof Error) {
-				console.error("Roo Code <Language Model API>: Stream error details:", {
+				this.log("Stream error details:", {
 					message: error.message,
 					stack: error.stack,
 					name: error.name,
@@ -483,12 +697,12 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			} else if (typeof error === "object" && error !== null) {
 				// Handle error-like objects
 				const errorDetails = JSON.stringify(error, null, 2)
-				console.error("Roo Code <Language Model API>: Stream error object:", errorDetails)
+				this.log("Stream error object:", errorDetails)
 				throw new Error(`Roo Code <Language Model API>: Response stream error: ${errorDetails}`)
 			} else {
 				// Fallback for unknown error types
 				const errorMessage = String(error)
-				console.error("Roo Code <Language Model API>: Unknown stream error:", errorMessage)
+				this.log("Unknown stream error:", errorMessage)
 				throw new Error(`Roo Code <Language Model API>: Response stream error: ${errorMessage}`)
 			}
 		}
@@ -509,7 +723,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			// Log any missing properties for debugging
 			for (const [prop, value] of Object.entries(requiredProps)) {
 				if (!value && value !== 0) {
-					console.warn(`Roo Code <Language Model API>: Client missing ${prop} property`)
+					this.log(`Client missing ${prop} property`)
 				}
 			}
 
@@ -540,7 +754,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			? stringifyVsCodeLmModelSelector(this.options.vsCodeLmModelSelector)
 			: "vscode-lm"
 
-		console.debug("Roo Code <Language Model API>: No client available, using fallback model info")
+		this.log("No client available, using fallback model info")
 
 		return {
 			id: fallbackId,
@@ -575,14 +789,32 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 	}
 }
 
-export async function getVsCodeLmModels() {
+export async function getVsCodeLmModels(): Promise<vscode.LanguageModelChat[]> {
 	try {
 		const models = await vscode.lm.selectChatModels({})
+
+		// Log available models for debugging
+		if (models?.length) {
+			console.debug(
+				"Available VS Code LM models:\n" +
+					JSON.stringify(
+						models.map((m) => ({
+							id: m.id,
+							name: m.name,
+							vendor: m.vendor,
+							family: m.family,
+							version: m.version,
+							maxInputTokens: m.maxInputTokens,
+						})),
+						null,
+						2,
+					),
+			)
+		}
+
 		return models || []
 	} catch (error) {
-		console.error(
-			`Error fetching VS Code LM models: ${JSON.stringify(error, Object.getOwnPropertyNames(error), 2)}`,
-		)
+		console.error("Error fetching VS Code LM models:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
 		return []
 	}
 }

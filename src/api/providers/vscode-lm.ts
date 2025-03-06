@@ -114,11 +114,21 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 				status: "ready",
 			})
 		} catch (error) {
-			this.log("ERROR", "Fatal error during initialization", {
-				error: error instanceof Error ? error.message : String(error),
-				stack: error instanceof Error ? error.stack : undefined,
-			})
-			this.handleFatalError(error)
+			if (error instanceof vscode.LanguageModelError) {
+				this.log("VS_CODE_LM_ERROR", "Language Model API Error", {
+					message: error.message,
+					code: error.code,
+					cause: error.cause,
+					stack: error.stack,
+				})
+
+				// Use the existing handleFatalError with detailed VS Code LM error info
+				return this.handleFatalError(
+					`VS Code Language Model Error: ${error.message} (Code: ${error.code})${error.cause ? `. Cause: ${error.cause}` : ""}`,
+				)
+			}
+
+			return this.handleFatalError(error)
 		}
 	}
 
@@ -646,6 +656,18 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			...convertToVsCodeLmMessages(cleanedMessages),
 		]
 
+		// Log the actual messages being sent to VS Code LM
+		this.log("REQUEST_DETAILS", "Processed messages for VS Code LM", {
+			messages: vsCodeLmMessages.map((msg) => ({
+				role: msg.role,
+				content: msg.content,
+				name: msg.name,
+			})),
+			requestOptions: {
+				justification: `Roo Code would like to use '${client.name}' from '${client.vendor}', Click 'Allow' to proceed.`,
+			},
+		})
+
 		this.log("STREAM", "Messages converted to VS Code LM format", {
 			totalMessages: vsCodeLmMessages.length,
 		})
@@ -700,12 +722,32 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			for await (const chunk of response.stream) {
 				if (chunk instanceof vscode.LanguageModelTextPart) {
 					if (typeof chunk.value === "string") {
+						// Log potential Copilot quota messages
+						if (
+							chunk.value.includes("quota") ||
+							chunk.value.includes("rate limit") ||
+							chunk.value.includes("You've reached your GitHub Copilot")
+						) {
+							this.log("COPILOT_QUOTA", "Copilot quota message detected", {
+								message: chunk.value,
+								clientInfo: {
+									name: client.name,
+									vendor: client.vendor,
+									family: client.family,
+								},
+							})
+						}
 						textChunkCount++
 						totalTextLength += chunk.value.length
 						accumulatedText += chunk.value
 						yield { type: "text", text: chunk.value }
 					}
 				} else if (chunk instanceof vscode.LanguageModelToolCallPart) {
+					this.log("TOOL_CALL", "Received tool call", {
+						name: chunk.name,
+						callId: chunk.callId,
+						inputType: typeof chunk.input,
+					})
 					toolCallCount++
 					try {
 						// Validate tool call parameters
@@ -751,6 +793,8 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 							toolName: chunk.name,
 							callId: chunk.callId,
 						})
+						// Continue processing other chunks even if one fails
+						continue
 					}
 				}
 			}
@@ -782,11 +826,32 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 				outputTokens: totalOutputTokens,
 			}
 		} catch (error) {
-			this.log("ERROR", "Error in message stream", {
-				error: error instanceof Error ? error.message : String(error),
-				stack: error instanceof Error ? error.stack : undefined,
-			})
-			throw error
+			this.ensureCleanState()
+
+			if (error instanceof vscode.CancellationError) {
+				throw new Error("Roo Code <Language Model API>: Request cancelled by user")
+			}
+
+			if (error instanceof Error) {
+				console.error("Roo Code <Language Model API>: Stream error details:", {
+					message: error.message,
+					stack: error.stack,
+					name: error.name,
+				})
+
+				// Return original error if it's already an Error instance
+				throw error
+			} else if (typeof error === "object" && error !== null) {
+				// Handle error-like objects
+				const errorDetails = JSON.stringify(error, null, 2)
+				console.error("Roo Code <Language Model API>: Stream error object:", errorDetails)
+				throw new Error(`Roo Code <Language Model API>: Response stream error: ${errorDetails}`)
+			} else {
+				// Fallback for unknown error types
+				const errorMessage = String(error)
+				console.error("Roo Code <Language Model API>: Unknown stream error:", errorMessage)
+				throw new Error(`Roo Code <Language Model API>: Response stream error: ${errorMessage}`)
+			}
 		}
 	}
 

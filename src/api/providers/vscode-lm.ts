@@ -833,7 +833,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			}
 
 			if (error instanceof Error) {
-				console.error("Roo Code <Language Model API>: Stream error details:", {
+				this.log("ERROR", "Stream error details", {
 					message: error.message,
 					stack: error.stack,
 					name: error.name,
@@ -844,12 +844,16 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			} else if (typeof error === "object" && error !== null) {
 				// Handle error-like objects
 				const errorDetails = JSON.stringify(error, null, 2)
-				console.error("Roo Code <Language Model API>: Stream error object:", errorDetails)
+				this.log("ERROR", "Stream error object", {
+					error: errorDetails,
+				})
 				throw new Error(`Roo Code <Language Model API>: Response stream error: ${errorDetails}`)
 			} else {
 				// Fallback for unknown error types
 				const errorMessage = String(error)
-				console.error("Roo Code <Language Model API>: Unknown stream error:", errorMessage)
+				this.log("ERROR", "Unknown stream error", {
+					error: errorMessage,
+				})
 				throw new Error(`Roo Code <Language Model API>: Response stream error: ${errorMessage}`)
 			}
 		}

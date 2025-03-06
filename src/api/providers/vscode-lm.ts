@@ -829,6 +829,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			this.ensureCleanState()
 
 			if (error instanceof vscode.CancellationError) {
+				this.client = null // Dispose client
 				throw new Error("Roo Code <Language Model API>: Request cancelled by user")
 			}
 
@@ -839,14 +840,22 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 					name: error.name,
 				})
 
-				// Return original error if it's already an Error instance
-				throw error
+				this.client = null // Dispose client
+				// Yield an error message before throwing
+				if (error.message.toLowerCase().includes("rate limit")) {
+					yield { type: "text", text: "Rate limit exceeded. Please try again in a few moments." }
+					throw new Error("Rate limit exceeded. Please try again in a few moments.")
+				}
+				yield { type: "text", text: `Error: ${error.message}` }
+				throw new Error(`Roo Code <Language Model API>: ${error.message}`)
 			} else if (typeof error === "object" && error !== null) {
 				// Handle error-like objects
 				const errorDetails = JSON.stringify(error, null, 2)
 				this.log("ERROR", "Stream error object", {
 					error: errorDetails,
 				})
+				this.client = null // Dispose client
+				yield { type: "text", text: `Error: ${errorDetails}` }
 				throw new Error(`Roo Code <Language Model API>: Response stream error: ${errorDetails}`)
 			} else {
 				// Fallback for unknown error types
@@ -854,6 +863,8 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 				this.log("ERROR", "Unknown stream error", {
 					error: errorMessage,
 				})
+				this.client = null // Dispose client
+				yield { type: "text", text: `Error: ${errorMessage}` }
 				throw new Error(`Roo Code <Language Model API>: Response stream error: ${errorMessage}`)
 			}
 		}

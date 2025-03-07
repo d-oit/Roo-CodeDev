@@ -7,6 +7,7 @@ import { CodeActionProvider } from "./core/CodeActionProvider"
 import { DIFF_VIEW_URI_SCHEME } from "./integrations/editor/DiffViewProvider"
 import { handleUri, registerCommands, registerCodeActions, registerTerminalActions } from "./activate"
 import { McpServerManager } from "./services/mcp/McpServerManager"
+import { activateOcrFeatures } from "./services/ocr"
 
 /**
  * Built using https://github.com/microsoft/vscode-webview-ui-toolkit
@@ -21,7 +22,7 @@ let extensionContext: vscode.ExtensionContext
 
 // This method is called when your extension is activated.
 // Your extension is activated the very first time the command is executed.
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
 	extensionContext = context
 	outputChannel = vscode.window.createOutputChannel("Roo-Code")
 	context.subscriptions.push(outputChannel)
@@ -36,6 +37,9 @@ export function activate(context: vscode.ExtensionContext) {
 	}
 
 	const sidebarProvider = new ClineProvider(context, outputChannel)
+
+	// Activate OCR features
+	await activateOcrFeatures(context)
 
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(ClineProvider.sideBarId, sidebarProvider, {

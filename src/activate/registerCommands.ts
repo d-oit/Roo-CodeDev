@@ -1,7 +1,7 @@
 import * as vscode from "vscode"
 import delay from "delay"
-
 import { ClineProvider } from "../core/webview/ClineProvider"
+import { activateOcrFeatures } from "../services/ocr"
 
 export type RegisterCommandOptions = {
 	context: vscode.ExtensionContext
@@ -9,8 +9,11 @@ export type RegisterCommandOptions = {
 	provider: ClineProvider
 }
 
-export const registerCommands = (options: RegisterCommandOptions) => {
+export const registerCommands = async (options: RegisterCommandOptions) => {
 	const { context, outputChannel } = options
+
+	// Register OCR features
+	await activateOcrFeatures(context)
 
 	for (const [command, callback] of Object.entries(getCommandsMap(options))) {
 		context.subscriptions.push(vscode.commands.registerCommand(command, callback))
@@ -47,12 +50,7 @@ const getCommandsMap = ({ context, outputChannel, provider }: RegisterCommandOpt
 const openClineInNewTab = async ({ context, outputChannel }: Omit<RegisterCommandOptions, "provider">) => {
 	outputChannel.appendLine("Opening Roo Code in new tab")
 
-	// (This example uses webviewProvider activation event which is necessary to
-	// deserialize cached webview, but since we use retainContextWhenHidden, we
-	// don't need to use that event).
-	// https://github.com/microsoft/vscode-extension-samples/blob/main/webview-sample/src/extension.ts
 	const tabProvider = new ClineProvider(context, outputChannel)
-	// const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined
 	const lastCol = Math.max(...vscode.window.visibleTextEditors.map((editor) => editor.viewColumn || 0))
 
 	// Check if there are any visible text editors, otherwise open a new group
@@ -71,8 +69,7 @@ const openClineInNewTab = async ({ context, outputChannel }: Omit<RegisterComman
 		localResourceRoots: [context.extensionUri],
 	})
 
-	// TODO: use better svg icon with light and dark variants (see
-	// https://stackoverflow.com/questions/58365687/vscode-extension-iconpath).
+	// TODO: use better svg icon with light and dark variants
 	panel.iconPath = {
 		light: vscode.Uri.joinPath(context.extensionUri, "assets", "icons", "rocket.png"),
 		dark: vscode.Uri.joinPath(context.extensionUri, "assets", "icons", "rocket.png"),

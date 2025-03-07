@@ -1,12 +1,12 @@
 # OCR Implementation Details
 
-This document describes the technical implementation of OCR features in Roo Code using Mistral's document understanding capabilities.
+This document describes the technical implementation of OCR features in Roo Code using the document understanding capabilities of OCR-capable models.
 
 ## Architecture Overview
 
 ### 1. Command Interface
 
-The OCR functionality is accessible through the `/process` command in chat:
+The OCR functionality is accessible through the `/process` command in chat (only visible when OCR API is configured):
 
 ```
 /process <file> [options]
@@ -20,44 +20,17 @@ Supported input types:
 
 ### 2. Configuration
 
-#### Model Configuration
+#### OCR API Configuration
 
 ```typescript
-interface OcrModelConfig {
-	temperature: number // Fixed at optimal setting for OCR
-	systemPrompt: string // Base prompt for OCR processing
-	userPromptTemplates: {
-		// Task-specific prompts
-		basic: string // Basic text extraction
-		tables: string // Table extraction
-		layout: string // Layout analysis
-		analysis: string // Full document analysis
+interface OcrApiConfig {
+	provider: string
+	model: string // Selected model must have ocr: true
+	temperature: number
+	ocrTextModel?: {
+		id: string
+		temperature: number
 	}
-}
-```
-
-#### Text OCR Configuration
-
-```typescript
-interface OcrConfig {
-	textProcessing: {
-		systemPrompt: string
-		userTemplates: {
-			basic: string
-			tables: string
-			layout: string
-			analysis: string
-		}
-	}
-}
-```
-
-#### API Handler Options
-
-```typescript
-interface ApiHandlerOptions {
-	// ... existing options ...
-	ocrConfig?: OcrConfig
 }
 ```
 
@@ -76,34 +49,55 @@ interface ProcessOptions {
 
 ### 3. Processing Pipeline
 
-1. **Document Loading**
+1. **API Configuration Check**
 
     ```typescript
-    async loadDocument(source: string): Promise<DocumentContent> {
-      // Determine source type (file/url/stream)
-      // Load and encode document
-      // Return standardized document content
+    async function checkOcrApiConfig(): Promise<boolean> {
+    	const config = await getOcrApiConfig()
+    	return config !== undefined
     }
     ```
 
-2. **Prompt Generation**
+2. **Document Loading**
 
     ```typescript
-    getOcrPrompt(type: 'basic' | 'tables' | 'layout' | 'analysis',
-                 document: DocumentContent): string {
-      // Select appropriate template
-      // Combine with system prompt
-      // Return formatted prompt
+    async function loadDocument(source: string): Promise<DocumentContent> {
+    	// Determine source type (file/url/stream)
+    	// Load and encode document
+    	// Return standardized document content
     }
     ```
 
-3. **Process Execution**
+3. **Model Selection**
+
     ```typescript
-    async processDocument(document: DocumentContent,
-                         options: ProcessOptions): Promise<DocumentOutput> {
-      // Prepare document and prompt
-      // Execute OCR process
-      // Format and return results
+    interface ApiModel {
+    	id: string
+    	name: string
+    	ocr?: boolean
+    }
+
+    function isOcrCapable(model: ApiModel): boolean {
+    	return model.ocr === true
+    }
+    ```
+
+4. **Process Execution**
+
+    ```typescript
+    async function processDocument(document: DocumentContent, options: ProcessOptions): Promise<DocumentOutput> {
+    	const config = await getOcrApiConfig()
+    	if (!config) {
+    		throw new Error("OCR API not configured")
+    	}
+
+    	// Process with OCR model
+    	const rawContent = await processWithOcr(document, config.model)
+
+    	// Process with text model
+    	const result = await processWithTextModel(rawContent, config.ocrTextModel)
+
+    	return formatOutput(result, options)
     }
     ```
 
@@ -121,7 +115,7 @@ Output types supported:
 
 1. **Chat Interface**
 
-    - Command parsing
+    - Command visibility check
     - Progress updates
     - Interactive options
     - Error handling
@@ -132,42 +126,68 @@ Output types supported:
     - Result saving
     - Visualization export
 
-3. **Model API**
+3. **API Integration**
 
-    - Document submission
-    - Stream handling
+    - OCR API configuration
+    - Model capability checking
     - Error recovery
-    - Model configuration:
-        ```typescript
-        // Default model configurations
-        const DEFAULT_MODELS = {
-        	text_model: "mistral-small-latest", // For text processing
-        	ocr_model: "mistral-ocr-latest", // For document OCR
-        }
-        ```
+
+    Example API integration:
+
+    ```typescript
+    interface ApiIntegration {
+      async checkOcrSupport(model: ApiModel): Promise<boolean>;
+      async processDocument(content: Buffer): Promise<string>;
+      async analyzeText(
+        text: string,
+        options: TextAnalysisOptions
+      ): Promise<AnalysisResult>;
+    }
+    ```
 
 4. **API Configuration UI**
-    - Model selection panel
-        - OCR model dropdown (default: "mistral-ocr-latest")
-        - Text OCR model dropdown (default: "mistral-small-latest")
-    - Configuration options
-        - Temperature controls
-        - System prompt editor
-        - Template customization
+    - OCR capability indicators in model list
+    - Text model selection when OCR model active
     - Example:
-        ```typescript
-        interface ModelSelectionUi {
-        	ocrModel: {
-        		id: string
-        		name: string
-        		options: string[]
-        		default: string
-        	}
-        	textOcrModel: {
-        		id: string
-        		name: string
-        		options: string[]
-        		default: string
-        	}
-        }
-        ```
+    ```typescript
+    interface ModelSelectionUI extends ApiOptionsPanel {
+    	// Extends existing API options panel
+
+    	// Additional UI elements for text model when OCR model selected
+    	ocrTextModelSection?: {
+    		visible: boolean
+    		modelSelect: {
+    			label: string
+    			value: string
+    			options: ApiModel[]
+    		}
+    		temperature: {
+    			label: string
+    			value: number
+    			min: 0
+    			max: 1
+    		}
+    	}
+    }
+    ```
+
+### 6. Error Handling
+
+```typescript
+class OcrError extends Error {
+	constructor(
+		message: string,
+		public readonly code: OcrErrorCode,
+		public readonly details?: any,
+	) {
+		super(message)
+	}
+}
+
+enum OcrErrorCode {
+	API_NOT_CONFIGURED = "OCR_API_NOT_CONFIGURED",
+	MODEL_NOT_OCR_CAPABLE = "MODEL_NOT_OCR_CAPABLE",
+	INVALID_DOCUMENT = "INVALID_DOCUMENT",
+	PROCESSING_FAILED = "PROCESSING_FAILED",
+}
+```

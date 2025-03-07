@@ -105,6 +105,12 @@
 				"icon": "$(question)"
 			},
 			{
+				"command": "roo-cline.process",
+				"title": "Process Document with OCR",
+				"icon": "$(file-text)",
+				"category": "Roo Code"
+			},
+			{
 				"command": "roo-cline.openInNewTab",
 				"title": "Open In New Tab",
 				"category": "Roo Code"

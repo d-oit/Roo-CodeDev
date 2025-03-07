@@ -1,7 +1,8 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import * as vscode from "vscode"
 import LRU from "lru-cache"
-import { SingleCompletionHandler } from "../"
+
+import { ApiHandler, SingleCompletionHandler } from "../"
 import { ApiStream } from "../transform/stream"
 import { convertToVsCodeLmMessages } from "../transform/vscode-lm-format"
 import { SELECTOR_SEPARATOR, stringifyVsCodeLmModelSelector } from "../../shared/vsCodeSelectorUtils"
@@ -348,6 +349,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 
 			throw new Error(`No models available for selector: ${selectorStr}`)
 		} catch (error) {
+			this.resetClient()
 			const errorMessage = error instanceof Error ? error.message : String(error)
 			this.log("ERROR", `Client creation failed (attempt ${attempt})`, {
 				error: errorMessage,
@@ -528,18 +530,13 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 
 			return tokenCount
 		} catch (error) {
-			if (error instanceof vscode.CancellationError) {
-				this.log("TOKENS", "Token counting cancelled by user")
-				return 0
-			}
-
-			const errorMessage = error instanceof Error ? error.message : "Unknown error"
-			this.log("TOKENS", "Token counting failed", {
-				error: errorMessage,
+			const message = error instanceof Error ? error.message : "Unknown error"
+			this.log("ERROR", "Client creation failed, resetting client", {
+				error: message,
 				stack: error instanceof Error ? error.stack : undefined,
 			})
-
-			return 0
+			this.resetClient()
+			throw new Error(`Roo Code <Language Model API>: Failed to create client: ${message}`)
 		}
 	}
 
@@ -902,8 +899,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 				outputTokens: totalOutputTokens,
 			}
 		} catch (error) {
-			this.ensureCleanState()
-
+			this.resetClient()
 			if (error instanceof vscode.CancellationError) {
 				this.client = null // Dispose client
 				throw new Error("Roo Code <Language Model API>: Request cancelled by user")
@@ -1032,6 +1028,21 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			}
 			throw error
 		}
+	}
+
+	private resetClient() {
+		if (this.client) {
+			this.client = null
+		}
+		if (this.disposable) {
+			this.disposable.dispose()
+			this.disposable = null
+		}
+		this.modelCache.clear()
+		this.tokenCache.clear()
+		this.clientInitPromise = null
+		this.currentRequestCancellation?.dispose()
+		this.currentRequestCancellation = null
 	}
 }
 

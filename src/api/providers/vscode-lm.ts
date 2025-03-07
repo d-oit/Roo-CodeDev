@@ -74,11 +74,11 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			timestamp: new Date().toISOString(),
 		}
 
-		// Always log errors, regardless of debug setting
+		// Only log to Output Channel once
 		channel.appendLine(`[ERROR] [${context}] ${JSON.stringify(errorDetails, null, 2)}`)
 
-		// Also log through regular logging system
-		this.log("ERROR", `Error in ${context}`, errorDetails)
+		// Remove this line to avoid duplicate logging
+		// this.log("ERROR", `Error in ${context}`, errorDetails)
 	}
 
 	private log(category: string, message: string, data?: any) {
@@ -124,13 +124,13 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 		})
 
 		// Cache initialization
-		this.modelCache = new LRU({
+		this.modelCache = new LRU<string, vscode.LanguageModelChat>({
 			max: 10,
-			ttl: 1000 * 60 * 5,
+			ttl: 1000 * 60 * 5, // 5 minutes
 		})
-		this.tokenCache = new LRU({
+		this.tokenCache = new LRU<string, number>({
 			max: 1000,
-			ttl: 1000 * 60 * 60,
+			ttl: 1000 * 60 * 60, // 1 hour
 		})
 		this.log("CACHE", "Cache initialization completed", {
 			modelCache: {
@@ -718,11 +718,6 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			content: this.cleanMessageContent(msg.content),
 		}))
 
-		this.log("STREAM", "Messages cleaned and prepared", {
-			cleanedSystemPromptLength: cleanedSystemPrompt.length,
-			cleanedMessagesCount: cleanedMessages.length,
-		})
-
 		// Convert Anthropic messages to VS Code LM messages
 		const vsCodeLmMessages: vscode.LanguageModelChatMessage[] = [
 			vscode.LanguageModelChatMessage.Assistant(cleanedSystemPrompt),
@@ -901,41 +896,40 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 		} catch (error) {
 			this.resetClient()
 			if (error instanceof vscode.CancellationError) {
-				this.client = null // Dispose client
+				this.client = null
+				this.logError(error, "Stream cancelled by user")
 				throw new Error("Roo Code <Language Model API>: Request cancelled by user")
 			}
 
 			if (error instanceof Error) {
-				this.log("ERROR", "Stream error details", {
-					message: error.message,
-					stack: error.stack,
-					name: error.name,
-				})
+				// Log to output channel first
+				this.logError(error, "Stream processing")
 
-				this.client = null // Dispose client
-				// Yield an error message before throwing
+				this.client = null
+				// Yield error message for chat view
 				if (error.message.toLowerCase().includes("rate limit")) {
 					yield { type: "text", text: "Rate limit exceeded. Please try again in a few moments." }
 					throw new Error("Rate limit exceeded. Please try again in a few moments.")
 				}
-				yield { type: "text", text: `Error: ${error.message}` }
+
+				// Show error in both output channel and chat
+				const errorMessage = `Error: ${error.message}`
+				yield { type: "text", text: errorMessage }
 				throw new Error(`Roo Code <Language Model API>: ${error.message}`)
 			} else if (typeof error === "object" && error !== null) {
 				// Handle error-like objects
 				const errorDetails = JSON.stringify(error, null, 2)
-				this.log("ERROR", "Stream error object", {
-					error: errorDetails,
-				})
-				this.client = null // Dispose client
+				this.logError({ message: errorDetails }, "Stream error object")
+
+				this.client = null
 				yield { type: "text", text: `Error: ${errorDetails}` }
 				throw new Error(`Roo Code <Language Model API>: Response stream error: ${errorDetails}`)
 			} else {
 				// Fallback for unknown error types
 				const errorMessage = String(error)
-				this.log("ERROR", "Unknown stream error", {
-					error: errorMessage,
-				})
-				this.client = null // Dispose client
+				this.logError({ message: errorMessage }, "Unknown stream error")
+
+				this.client = null
 				yield { type: "text", text: `Error: ${errorMessage}` }
 				throw new Error(`Roo Code <Language Model API>: Response stream error: ${errorMessage}`)
 			}
@@ -1038,8 +1032,9 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			this.disposable.dispose()
 			this.disposable = null
 		}
-		this.modelCache.clear()
-		this.tokenCache.clear()
+		// Use the correct method to clear the cache
+		this.modelCache?.clear?.()
+		this.tokenCache?.clear?.()
 		this.clientInitPromise = null
 		this.currentRequestCancellation?.dispose()
 		this.currentRequestCancellation = null

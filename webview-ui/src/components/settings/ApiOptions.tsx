@@ -126,6 +126,7 @@ const ApiOptions = ({
 				label: modelId,
 			})),
 		]
+
 		return (
 			<Dropdown
 				id="model-id"
@@ -326,8 +327,41 @@ const ApiOptions = ({
 						</VSCodeLink>
 					</p>
 
-					{(apiConfiguration?.apiModelId?.startsWith("codestral-") ||
-						(!apiConfiguration?.apiModelId && mistralDefaultModelId.startsWith("codestral-"))) && (
+					<div className="dropdown-container">
+						<label htmlFor="model-id">
+							<span style={{ fontWeight: 500 }}>Model</span>
+						</label>
+						{selectedProvider === "mistral" && createDropdown(mistralModels)}
+					</div>
+
+					{selectedModelId !== "mistral-ocr-latest" && (
+						<>
+							<VSCodeTextField
+								value={apiConfiguration?.stopToken}
+								style={{ width: "100%", marginTop: "10px" }}
+								onInput={handleInputChange("stopToken")}
+								placeholder="Enter stop token (optional)">
+								<span style={{ fontWeight: 500 }}>Optional: Stop Token e.g. \n\n</span>
+							</VSCodeTextField>
+							<p style={{ fontSize: "12px", marginTop: 3, color: "var(--vscode-descriptionForeground)" }}>
+								Optional token to stop generation when encountered
+							</p>
+
+							<p>
+								<div style={{ display: "flex", alignItems: "center" }}>
+									<Checkbox
+										checked={apiConfiguration?.mistralModelStreamingEnabled}
+										onChange={handleInputChange("mistralModelStreamingEnabled", noTransform)}>
+										Enable streaming
+									</Checkbox>
+								</div>
+							</p>
+						</>
+					)}
+
+					{(selectedModelId?.startsWith("codestral-") ||
+						(!selectedModelId && mistralDefaultModelId.startsWith("codestral-")) ||
+						selectedModelId === "mistral-ocr-latest") && (
 						<div>
 							<VSCodeTextField
 								value={apiConfiguration?.mistralCodestralUrl || ""}
@@ -335,44 +369,13 @@ const ApiOptions = ({
 								type="url"
 								onInput={handleInputChange("mistralCodestralUrl")}
 								placeholder="Default: https://codestral.mistral.ai">
-								<span style={{ fontWeight: 500 }}>Codestral Base URL (Optional)</span>
+								<span style={{ fontWeight: 500 }}>Base URL (Optional)</span>
 							</VSCodeTextField>
-							<p
-								style={{
-									fontSize: "12px",
-									marginTop: 3,
-									color: "var(--vscode-descriptionForeground)",
-								}}>
-								Set alternative URL for Codestral model: https://api.mistral.ai
+							<p style={{ fontSize: "12px", marginTop: 3, color: "var(--vscode-descriptionForeground)" }}>
+								Set alternative URL for model: https://api.mistral.ai
 							</p>
 						</div>
 					)}
-
-					<p>
-						<div style={{ display: "flex", alignItems: "center" }}>
-							<Checkbox
-								checked={apiConfiguration?.mistralModelStreamingEnabled}
-								onChange={handleInputChange("mistralModelStreamingEnabled", noTransform)}>
-								Enable streaming
-							</Checkbox>
-						</div>
-					</p>
-
-					<VSCodeTextField
-						value={apiConfiguration?.stopToken}
-						style={{ width: "100%", marginTop: "10px" }}
-						onInput={handleInputChange("stopToken")}
-						placeholder="Enter stop token (optional)">
-						<span style={{ fontWeight: 500 }}>Optional: Stop Token e.g. \n\n</span>
-					</VSCodeTextField>
-					<p
-						style={{
-							fontSize: "12px",
-							marginTop: 3,
-							color: "var(--vscode-descriptionForeground)",
-						}}>
-						Optional token to stop generation when encountered
-					</p>
 				</div>
 			)}
 
@@ -1284,7 +1287,7 @@ const ApiOptions = ({
 					</>
 				)}
 
-			{!fromWelcomeView && (
+			{!fromWelcomeView && selectedModelId !== "mistral-ocr-latest" && (
 				<div style={{ marginTop: "10px" }}>
 					<TemperatureControl
 						value={apiConfiguration?.modelTemperature}

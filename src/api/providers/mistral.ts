@@ -1,12 +1,34 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { Mistral } from "@mistralai/mistralai"
 import { ApiHandler } from "../"
-import { ApiHandlerOptions, mistralDefaultModelId, MistralModelId, mistralModels, ModelInfo } from "../../shared/api"
+import {
+	ApiHandlerOptions,
+	mistralDefaultModelId,
+	MistralModelId,
+	mistralModels,
+	ModelInfo,
+	DocumentContent,
+	DocumentOutput,
+} from "../../shared/api"
 import { convertToMistralMessages } from "../transform/mistral-format"
 import { ApiStream } from "../transform/stream"
 import * as vscode from "vscode"
 
 const MISTRAL_DEFAULT_TEMPERATURE = 0
+
+class DocumentProcessingError extends Error {
+	constructor(message: string) {
+		super(message)
+		this.name = "DocumentProcessingError"
+	}
+}
+
+class UnsupportedDocumentTypeError extends Error {
+	constructor(mimeType: string) {
+		super(`Unsupported document type: ${mimeType}`)
+		this.name = "UnsupportedDocumentTypeError"
+	}
+}
 
 export class MistralHandler implements ApiHandler {
 	private options: ApiHandlerOptions
@@ -208,6 +230,202 @@ export class MistralHandler implements ApiHandler {
 				throw new Error(`Mistral completion error: ${error.message}`, { cause: error })
 			}
 			throw error
+		}
+	}
+
+	/**
+	 * Process a document using Mistral's document understanding capabilities.
+	 * This method requires a model that supports document processing (e.g., mistral-ocr-latest).
+	 *
+	 * @param document - The document to process (PDF or image)
+	 * @param options - Processing options
+	 * @param options.extractTables - Whether to detect and extract tables
+	 * @param options.analyzeLayout - Whether to analyze document layout
+	 * @param options.generateVisuals - Whether to generate visual representations
+	 * @returns Processed document with markdown content and optional visualizations
+	 * @throws {DocumentProcessingError} When processing fails
+	 * @throws {UnsupportedDocumentTypeError} When document type is not supported
+	 */
+	async processDocument(
+		document: DocumentContent,
+		options?: {
+			extractTables?: boolean
+			analyzeLayout?: boolean
+			generateVisuals?: boolean
+		},
+	): Promise<DocumentOutput> {
+		const model = this.getModel()
+		if (!model.info.documentProcessing?.supported) {
+			throw new Error("Current model does not support document processing")
+		}
+
+		this.logDebug(`Processing document with options: ${JSON.stringify(options)}`)
+
+		try {
+			const systemPrompt = this.getDocumentProcessingPrompt(options)
+			const base64Data =
+				document.type === "base64" ? document.data : await this.fetchAndEncodeImage(document.data)
+
+			const response = await this.client.chat.complete({
+				model: model.id,
+				messages: [
+					{ role: "system", content: this.getDocumentProcessingPrompt(options) },
+					{
+						role: "user",
+						content: `[Document to process: data:${document.mimeType};base64,${base64Data}]
+
+Please analyze this document and provide a well-formatted markdown representation.`,
+					},
+				],
+				temperature: 0,
+			})
+
+			const content = response.choices?.[0]?.message?.content
+			const markdown = typeof content === "string" ? content : ""
+
+			return {
+				markdown,
+				structure: this.extractStructure(markdown),
+				...(options?.generateVisuals && model.info.documentProcessing.capabilities.visualization
+					? { visualizations: await this.generateVisualizations(document) }
+					: {}),
+			}
+		} catch (error) {
+			this.logDebug(`Document processing error: ${error instanceof Error ? error.message : String(error)}`)
+			throw new DocumentProcessingError(
+				`Failed to process document: ${error instanceof Error ? error.message : String(error)}`,
+			)
+		}
+	}
+
+	private getDocumentProcessingPrompt(options?: { extractTables?: boolean; analyzeLayout?: boolean }): string {
+		return `You are a document processing assistant. Your task is to:
+1. Extract and format all text content
+2. ${options?.extractTables ? "Detect and preserve table structures" : ""}
+3. ${options?.analyzeLayout ? "Preserve document layout and structure" : ""}
+4. Generate well-formatted markdown output
+Please maintain the document's original structure and formatting as much as possible.`
+	}
+
+	private async fetchAndEncodeImage(url: string): Promise<string> {
+		try {
+			const response = await fetch(url)
+			const arrayBuffer = await response.arrayBuffer()
+			return Buffer.from(arrayBuffer).toString("base64")
+		} catch (error) {
+			throw new DocumentProcessingError(
+				`Failed to fetch image from URL: ${error instanceof Error ? error.message : String(error)}`,
+			)
+		}
+	}
+
+	private extractStructure(markdown: string): DocumentOutput["structure"] {
+		const lines = markdown.split("\n")
+		const structure: DocumentOutput["structure"] = { sections: [] }
+		let currentSection: { heading?: string; content: string } = { content: "" }
+
+		for (const line of lines) {
+			if (line.startsWith("#")) {
+				// If we have content in the current section, save it
+				if (currentSection.content.trim()) {
+					structure.sections?.push({ ...currentSection })
+				}
+				// Start new section
+				currentSection = {
+					heading: line.replace(/^#+\s*/, ""),
+					content: "",
+				}
+			} else {
+				currentSection.content += line + "\n"
+			}
+		}
+
+		// Add the last section
+		if (currentSection.content.trim()) {
+			structure.sections?.push(currentSection)
+		}
+
+		return structure
+	}
+
+	/**
+	 * Generate visual representations of the document structure.
+	 * This includes layout analysis and section relationships.
+	 *
+	 * @param document - The document to visualize
+	 * @returns Object containing base64-encoded visualizations, or undefined if visualization is not supported
+	 * @private
+	 */
+	private async generateVisualizations(document: DocumentContent): Promise<DocumentOutput["visualizations"]> {
+		const model = this.getModel()
+		if (!model.info.documentProcessing?.capabilities.visualization) {
+			return undefined
+		}
+
+		try {
+			const base64Data =
+				document.type === "base64" ? document.data : await this.fetchAndEncodeImage(document.data)
+
+			// Generate layout visualization
+			const layoutResponse = await this.client.chat.complete({
+				model: model.id,
+				messages: [
+					{
+						role: "system",
+						content:
+							"Analyze the document layout and return a visualization that highlights the document structure.",
+					},
+					{
+						role: "user",
+						content: `[Document to analyze: data:${document.mimeType};base64,${base64Data}]`,
+					},
+				],
+				temperature: 0,
+			})
+
+			// Generate sections visualization
+			const sectionsResponse = await this.client.chat.complete({
+				model: model.id,
+				messages: [
+					{
+						role: "system",
+						content: "Create a visual representation of the document's sections and their relationships.",
+					},
+					{
+						role: "user",
+						content: `[Document to analyze: data:${document.mimeType};base64,${base64Data}]`,
+					},
+				],
+				temperature: 0,
+			})
+
+			// Extract visualizations from responses
+			const layout = this.extractVisualizationFromResponse(layoutResponse)
+			const sections = this.extractVisualizationFromResponse(sectionsResponse)
+
+			return {
+				layout,
+				sections,
+				// Tables visualization will be added when supported by Mistral
+				tables: [],
+			}
+		} catch (error) {
+			this.logDebug(`Visualization generation error: ${error instanceof Error ? error.message : String(error)}`)
+			return undefined
+		}
+	}
+
+	private extractVisualizationFromResponse(response: any): string | undefined {
+		try {
+			const content = response.choices?.[0]?.message?.content
+			if (typeof content === "string") {
+				// Extract base64 image data from content
+				const match = content.match(/data:image\/[^;]+;base64,([^"'\s]+)/)
+				return match?.[1]
+			}
+			return undefined
+		} catch {
+			return undefined
 		}
 	}
 }

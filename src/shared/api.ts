@@ -90,6 +90,38 @@ export interface ModelInfo {
 	cacheReadsPrice?: number
 	description?: string
 	reasoningEffort?: "low" | "medium" | "high"
+	documentProcessing?: {
+		supported: boolean
+		capabilities: {
+			textExtraction?: boolean
+			tableDetection?: boolean
+			layoutAnalysis?: boolean
+			visualization?: boolean
+		}
+	}
+}
+
+export interface DocumentContent {
+	type: "base64" | "url"
+	data: string
+	mimeType: string
+	fileName?: string
+}
+
+export interface DocumentOutput {
+	markdown: string
+	structure?: {
+		title?: string
+		sections?: Array<{
+			heading?: string
+			content: string
+		}>
+	}
+	visualizations?: {
+		layout?: string
+		sections?: string
+		tables?: string[]
+	}
 }
 
 // Anthropic
@@ -672,6 +704,25 @@ export const azureOpenAiDefaultApiVersion = "2024-08-01-preview"
 export type MistralModelId = keyof typeof mistralModels
 export const mistralDefaultModelId: MistralModelId = "codestral-latest"
 export const mistralModels = {
+	"mistral-ocr-latest": {
+		maxTokens: 32_000,
+		contextWindow: 32_000,
+		supportsImages: true,
+		supportsPromptCache: false,
+		inputPrice: 2.0,
+		outputPrice: 6.0,
+		documentProcessing: {
+			supported: true,
+			capabilities: {
+				textExtraction: true,
+				tableDetection: true,
+				layoutAnalysis: true,
+				visualization: true,
+			},
+		},
+		description:
+			"Specialized model for document understanding, OCR, and visual analysis with markdown output support",
+	},
 	"codestral-latest": {
 		maxTokens: 256_000,
 		contextWindow: 256_000,

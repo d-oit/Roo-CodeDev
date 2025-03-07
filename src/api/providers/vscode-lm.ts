@@ -15,6 +15,39 @@ import { BaseProvider } from "./base-provider"
 export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHandler {
 	private static readonly MAX_RETRIES = 3
 	private static readonly RETRY_DELAY = 1000 // ms
+	private requestCount: number = 0
+	private lastResetTime: number = Date.now()
+	private static readonly MAX_CONSECUTIVE_PROMPTS = 5
+	private static readonly PROMPT_TIMEOUT = 60000 // 60 seconds
+	private lastPrompts: Array<{ prompt: string; timestamp: number }> = []
+
+	private async checkRateLimit(): Promise<void> {
+		const config = vscode.workspace.getConfiguration("roo-cline.vsCodeLm.rateLimit")
+		const requestLimit = config.get<number>("requestLimit") ?? 50
+		const delaySeconds = config.get<number>("delaySeconds") ?? 71
+
+		// Reset counter if it's been more than the delay period
+		const now = Date.now()
+		if (now - this.lastResetTime > delaySeconds * 1000) {
+			this.requestCount = 0
+			this.lastResetTime = now
+		}
+
+		// If we've hit the limit, enforce the delay
+		if (this.requestCount >= requestLimit) {
+			this.log("RATE_LIMIT", `Rate limit reached. Waiting ${delaySeconds} seconds`, {
+				requestCount: this.requestCount,
+				delaySeconds: delaySeconds,
+			})
+
+			await new Promise((resolve) => setTimeout(resolve, delaySeconds * 1000))
+			this.requestCount = 0
+			this.lastResetTime = Date.now()
+		}
+
+		this.requestCount++
+	}
+
 	private modelCache: LRU<string, vscode.LanguageModelChat>
 	private tokenCache: LRU<string, number>
 	private static outputChannel: vscode.OutputChannel | undefined = undefined
@@ -22,6 +55,30 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 	private client: vscode.LanguageModelChat | null
 	private disposable: vscode.Disposable | null
 	private currentRequestCancellation: vscode.CancellationTokenSource | null
+
+	private ensureOutputChannel() {
+		if (!VsCodeLmHandler.outputChannel) {
+			VsCodeLmHandler.outputChannel = vscode.window.createOutputChannel("Roo Code LM API")
+		}
+		return VsCodeLmHandler.outputChannel
+	}
+
+	private logError(error: unknown, context: string) {
+		const channel = this.ensureOutputChannel()
+		const errorMessage = error instanceof Error ? error.message : String(error)
+		const errorDetails = {
+			message: errorMessage,
+			stack: error instanceof Error ? error.stack : undefined,
+			context,
+			timestamp: new Date().toISOString(),
+		}
+
+		// Always log errors, regardless of debug setting
+		channel.appendLine(`[ERROR] [${context}] ${JSON.stringify(errorDetails, null, 2)}`)
+
+		// Also log through regular logging system
+		this.log("ERROR", `Error in ${context}`, errorDetails)
+	}
 
 	private log(category: string, message: string, data?: any) {
 		// Explicitly check configuration
@@ -382,6 +439,8 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 	 * @returns A promise resolving to the token count
 	 */
 	override async countTokens(content: Array<Anthropic.Messages.ContentBlockParam>): Promise<number> {
+		await this.checkRateLimit()
+
 		const cacheKey = JSON.stringify(content)
 
 		try {
@@ -626,7 +685,24 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 		return content
 	}
 
+	private isPromptLoop(prompt: string): boolean {
+		const now = Date.now()
+
+		// Remove old prompts (older than PROMPT_TIMEOUT)
+		this.lastPrompts = this.lastPrompts.filter((p) => now - p.timestamp < VsCodeLmHandler.PROMPT_TIMEOUT)
+
+		// Check for repeated prompts
+		const similarPrompts = this.lastPrompts.filter((p) => p.prompt === prompt).length
+
+		// Add current prompt
+		this.lastPrompts.push({ prompt, timestamp: now })
+
+		return similarPrompts >= VsCodeLmHandler.MAX_CONSECUTIVE_PROMPTS
+	}
+
 	override async *createMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream {
+		await this.checkRateLimit()
+
 		const startTime = Date.now()
 		this.log("STREAM", "Starting message creation", {
 			systemPromptLength: systemPrompt.length,
@@ -928,6 +1004,10 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 	}
 
 	async completePrompt(prompt: string): Promise<string> {
+		if (this.isPromptLoop(prompt)) {
+			throw new Error("Detected potential prompt loop. Request blocked for safety.")
+		}
+
 		try {
 			const client = await this.getClient()
 			const response = await client.sendRequest(

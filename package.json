@@ -274,6 +274,26 @@
 						}
 					},
 					"description": "Settings for VSCode Language Model API"
+				},
+				"roo-cline.vsCodeLm.rateLimit": {
+					"type": "object",
+					"properties": {
+						"requestLimit": {
+							"type": "number",
+							"default": 50,
+							"description": "Number of requests before rate limiting kicks in"
+						},
+						"delaySeconds": {
+							"type": "number",
+							"default": 71,
+							"description": "Delay in seconds after hitting the request limit"
+						}
+					},
+					"default": {
+						"requestLimit": 50,
+						"delaySeconds": 71
+					},
+					"description": "Rate limiting configuration for VS Code Language Model"
 				}
 			}
 		}

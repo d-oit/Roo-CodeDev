@@ -119,22 +119,29 @@ export class ProcessCommand {
 				{
 					label: "$(file-text) Basic Text Extraction",
 					description: "Extract text content only",
-					value: { analyze: false, visualize: false },
+					value: {
+						extractTables: false,
+						analyzeLayout: false,
+						generateVisuals: false,
+					},
 				},
 				{
 					label: "$(table) Table Detection",
 					description: "Extract text and detect tables",
-					value: { analyze: true, visualize: true, vizType: "tables" as const },
+					value: {
+						extractTables: true,
+						analyzeLayout: false,
+						generateVisuals: false,
+					},
 				},
 				{
-					label: "$(layout) Layout Analysis",
-					description: "Full document layout analysis",
-					value: { analyze: true, visualize: true, vizType: "layout" as const },
-				},
-				{
-					label: "$(symbol-structure) Document Structure",
-					description: "Analyze document structure and sections",
-					value: { analyze: true, visualize: true, vizType: "sections" as const },
+					label: "$(layout) Full Document Analysis",
+					description: "Layout analysis with visual representations",
+					value: {
+						extractTables: true,
+						analyzeLayout: true,
+						generateVisuals: true,
+					},
 				},
 			],
 			{

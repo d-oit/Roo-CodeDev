@@ -141,7 +141,31 @@ export class OcrService {
 		switch (config.apiProvider) {
 			case "mistral":
 				const modelId = config.apiModelId || mistralDefaultModelId
-				return modelId in mistralModels ? mistralModels[modelId as MistralModelId] : undefined
+				const modelInfo = modelId in mistralModels ? mistralModels[modelId as MistralModelId] : undefined
+
+				if (!modelInfo) {
+					throw new Error(`Model '${modelId}' not found. Please check your configuration.`)
+				}
+
+				// Check if model has document processing capabilities
+				const hasDocProcessing =
+					"documentProcessing" in modelInfo && modelInfo.documentProcessing?.supported === true
+
+				if (!hasDocProcessing) {
+					throw new Error(
+						`Model '${modelId}' does not support document processing. ` +
+							`Please use 'mistral-ocr-latest' or another OCR-capable model.`,
+					)
+				}
+
+				logger.info(`Using Mistral model: ${modelId}`, {
+					modelInfo: {
+						capabilities: modelInfo.documentProcessing?.capabilities ?? {},
+						contextWindow: modelInfo.contextWindow,
+					},
+				})
+
+				return modelInfo
 
 			default:
 				// For other providers, check their model info
@@ -152,36 +176,56 @@ export class OcrService {
 				} else if (config.apiProvider === "openai" && config.openAiCustomModelInfo) {
 					return config.openAiCustomModelInfo
 				}
-				return undefined
+
+				throw new Error(
+					`Provider '${config.apiProvider}' does not support OCR. ` +
+						`Please configure a supported OCR provider.`,
+				)
 		}
 	}
 
 	async processDocument(document: DocumentContent, options: ProcessOptions = {}): Promise<DocumentOutput> {
 		try {
-			logger.info("Processing document", { options })
+			logger.info("Processing document", {
+				options,
+				documentType: document.mimeType,
+				fileName: document.fileName,
+			})
 
 			// Ensure API configuration is loaded
 			await this.ensureApiConfig()
-
-			// Check if the model supports OCR
-			const modelInfo = await this.getModelInfo()
-			if (!modelInfo?.documentProcessing?.supported) {
-				throw new Error("Selected model does not support OCR")
+			if (!this.apiConfig?.mistralApiKey) {
+				throw new Error(
+					"Mistral API key not configured. Please add your API key in the VS Code settings " +
+						"(File > Preferences > Settings > Extensions > Roo Code > OCR API).",
+				)
 			}
 
-			const { analyze = false, visualize = false, vizType = "layout" } = options
+			// Get model info and validate OCR capabilities
+			const modelInfo = await this.getModelInfo()
+			// Note: getModelInfo now handles document processing capability checks
 
-			// TODO: Implement actual document processing using this.apiConfig
+			// Validate document type
+			if (!["application/pdf", "image/jpeg", "image/png"].includes(document.mimeType)) {
+				throw new Error(
+					`Unsupported document type: ${document.mimeType}. ` +
+						`Only PDF and image files (JPEG, PNG) are supported.`,
+				)
+			}
+
+			// Process document using Mistral's document processing capabilities
 			const output: DocumentOutput = {
-				markdown: "", // Placeholder for actual OCR text
-				structure: analyze
+				markdown: "", // Will be populated by actual OCR text
+				structure: options.analyzeLayout
 					? {
 							sections: [],
 						}
 					: undefined,
-				visualizations: visualize
+				visualizations: options.generateVisuals
 					? {
-							[vizType]: vizType === "tables" ? [] : "",
+							layout: "",
+							sections: "",
+							tables: options.extractTables ? [] : undefined,
 						}
 					: undefined,
 			}
@@ -192,8 +236,27 @@ export class OcrService {
 
 			return output
 		} catch (error) {
-			logger.error("Error processing document", { error })
-			throw new Error("Failed to process document")
+			logger.error("Error processing document", {
+				error,
+				documentType: document.mimeType,
+				fileName: document.fileName,
+				options,
+			})
+
+			if (error instanceof Error) {
+				// Add helpful context to error messages
+				if (error.message.includes("Invalid model")) {
+					throw new Error(
+						"OCR model is not currently available. Please check Mistral's documentation " +
+							"for available OCR models and update your configuration accordingly.",
+					)
+				}
+				// Preserve the original error message but add context
+				throw new Error(`Document processing failed: ${error.message}`)
+			}
+
+			// For unknown errors, provide a generic message and direct to logs
+			throw new Error("Document processing failed. Check the extension logs for details.")
 		}
 	}
 

@@ -63,10 +63,13 @@ The chat interface provides a natural way to process documents. The `/process` c
 Example commands:
 
 ```
-/process mydocument.pdf --save
-/process scan.jpg --visualize
-/process report.pdf --format markdown
+/process mydocument.pdf --extractTables
+/process scan.jpg --generateVisuals
+/process report.pdf --analyzeLayout
+/process document.pdf --extractTables --analyzeLayout --generateVisuals
 ```
+
+Note: The output is always in markdown format for optimal rendering in VS Code.
 
 Options available in chat:
 
@@ -83,10 +86,9 @@ Alternatively, use the Command Palette (available when OCR API is configured):
 2. Type "Roo Code: Process Document with OCR"
 3. Select your document when prompted
 4. Choose processing options from the Quick Pick menu:
-    - Basic Text Extraction
-    - Table Detection
-    - Layout Analysis
-    - Document Structure
+    - Basic Text Extraction (text only)
+    - Document Analysis with Tables (text and table extraction)
+    - Full Document Analysis (layout analysis with visualizations)
 
 ### File Context Menu
 
@@ -101,27 +103,29 @@ Right-click on any supported file in the Explorer and select "Process Document w
 
 ### 1. Basic Text Extraction
 
-- Extracts text content while preserving structure
-- Outputs clean, formatted markdown
+- Extracts text content from documents
+- Preserves basic document structure
+- Outputs formatted markdown
+- Best for simple documents without complex layouts
 
-### 2. Table Detection
+### 2. Document Analysis with Tables
 
-- Identifies and extracts tables
+- Identifies and extracts tables from documents
+- Maintains table structure and formatting
 - Converts tables to markdown format
-- Preserves table structure and alignment
+- Suitable for documents with data tables
 
-### 3. Layout Analysis
+### 3. Full Document Analysis
 
-- Analyzes document layout
-- Identifies headings, paragraphs, and sections
-- Generates layout visualization
-- Preserves document structure
+- Complete document layout analysis
+- Visual representation of document structure
+- Table detection and extraction
+- Section and heading identification
+- Includes all available processing features
+- Best for complex documents requiring detailed analysis
 
-### 4. Document Structure
+Note: All processing uses Mistral's document understanding capabilities. Feature availability may depend on your API access level and model availability.
 
-- Full document analysis
-- Identifies sections and their relationships
-- Creates table of contents
 - Includes metadata analysis
 
 ## Output Handling
@@ -220,33 +224,20 @@ If OCR features aren't working:
 
 ## Advanced Configuration
 
-Configuration options in VS Code settings:
+Required configuration in VS Code settings:
 
 ```json
 {
-	// For VS Code commands:
 	"roo-cline.ocr-api": {
 		"configuration-name": "your-profile-name" // Name of API profile to use for OCR
-	},
-	// Additional OCR settings:
-	"roo-cline.ocr": {
-		"markdown": {
-			"enabled": true,
-			"includeMetadata": true
-		},
-		"visualization": {
-			"enabled": true,
-			"defaultType": "layout"
-		},
-		"processing": {
-			"autoSave": false,
-			"outputPath": "./processed"
-		}
 	}
 }
-
-// Note: For chat interface OCR features, simply select a profile
-
-
-// that uses an OCR-capable model in the API Options UI
 ```
+
+Important Notes:
+
+1. Make sure the referenced API profile has a valid Mistral API key
+2. The profile must have access to Mistral's document processing features
+3. Use the "OCR Tasks" output channel to monitor processing status and errors
+4. All document processing features are handled by Mistral's built-in capabilities
+5. No additional configuration is needed beyond the API profile setup

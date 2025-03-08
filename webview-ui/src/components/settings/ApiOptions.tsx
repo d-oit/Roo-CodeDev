@@ -1263,7 +1263,8 @@ const ApiOptions = ({
 				selectedProvider !== "openai" &&
 				selectedProvider !== "ollama" &&
 				selectedProvider !== "lmstudio" &&
-				selectedProvider !== "unbound" && (
+				selectedProvider !== "unbound" &&
+				selectedProvider !== "mistral" && (
 					<>
 						<div className="dropdown-container">
 							<label htmlFor="model-id">
@@ -1275,7 +1276,6 @@ const ApiOptions = ({
 							{selectedProvider === "gemini" && createDropdown(geminiModels)}
 							{selectedProvider === "openai-native" && createDropdown(openAiNativeModels)}
 							{selectedProvider === "deepseek" && createDropdown(deepSeekModels)}
-							{selectedProvider === "mistral" && createDropdown(mistralModels)}
 						</div>
 
 						<ModelInfoView

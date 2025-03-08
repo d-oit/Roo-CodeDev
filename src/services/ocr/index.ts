@@ -1,38 +1,38 @@
 import { OcrService } from "./OcrService"
 import { ProcessCommand } from "./ProcessCommand"
-import { DEFAULT_OCR_CONFIG, DEFAULT_MODEL_CONFIG } from "./config"
 import * as vscode from "vscode"
 import { logger } from "../../utils/logging"
 
 export { OcrService } from "./OcrService"
 export { ProcessCommand } from "./ProcessCommand"
 export * from "./types"
-export * from "./config"
 
 export async function activateOcrFeatures(context: vscode.ExtensionContext): Promise<void> {
 	try {
 		logger.info("Activating OCR features")
 
-		// Initialize OCR service with default configuration
-		const ocrService = new OcrService(DEFAULT_OCR_CONFIG)
-
-		// Initialize and register the process command
-		const processCommand = new ProcessCommand(ocrService)
+		// Create process command for VS Code
+		const processCommand = await ProcessCommand.createForVSCode()
 		await processCommand.registerCommand(context)
 
-		// Register configuration change handlers
+		// Register configuration change handler
 		context.subscriptions.push(
 			vscode.workspace.onDidChangeConfiguration((e) => {
-				if (e.affectsConfiguration("roo.ocr")) {
-					logger.info("OCR configuration changed")
-					// TODO: Handle configuration updates
+				if (e.affectsConfiguration("roo-cline.ocr-api")) {
+					logger.info("OCR API configuration changed")
+					// Recreate process command with new configuration
+					ProcessCommand.createForVSCode()
+						.then((newCommand) => {
+							newCommand.registerCommand(context)
+						})
+						.catch((error) => {
+							logger.error("Failed to update OCR command after config change", { error })
+						})
 				}
 			}),
 		)
 
-		logger.info("OCR features activated successfully", {
-			model: DEFAULT_MODEL_CONFIG.modelId,
-		})
+		logger.info("OCR features activated successfully")
 	} catch (error) {
 		logger.error("Failed to activate OCR features", { error })
 		throw error

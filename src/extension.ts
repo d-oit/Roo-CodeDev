@@ -39,7 +39,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	const sidebarProvider = new ClineProvider(context, outputChannel)
 
 	// Activate OCR features
-	await activateOcrFeatures(context)
+	activateOcrFeatures(context)
 
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(ClineProvider.sideBarId, sidebarProvider, {

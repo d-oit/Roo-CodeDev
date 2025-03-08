@@ -1,5 +1,13 @@
 import { logger } from "../../utils/logging"
-import { DocumentContent, DocumentOutput, ApiConfiguration } from "../../shared/api"
+import {
+	DocumentContent,
+	DocumentOutput,
+	ApiConfiguration,
+	ModelInfo,
+	mistralModels,
+	mistralDefaultModelId,
+	MistralModelId,
+} from "../../shared/api"
 import { ProcessOptions, OcrConfig, OcrServiceConfig, OcrConfigVSCode } from "./types"
 import { DEFAULT_OCR_CONFIG } from "./config"
 import * as vscode from "vscode"
@@ -15,19 +23,39 @@ export class OcrService {
 	}
 
 	private async loadApiConfig(): Promise<ApiConfiguration> {
-		if (this.serviceConfig.type === "profile") {
-			// Get API config from profile name
-			// TODO: Implement getting API config from profile name
-			return {} as ApiConfiguration
-		} else {
-			const vsConfig = await vscode.workspace.getConfiguration("roo-cline.ocr-api")
-			const configName = vsConfig.get<string>("configuration-name")
-			if (!configName) {
-				throw new Error("No configuration profile specified in VS Code settings")
+		try {
+			if (this.serviceConfig.type === "profile") {
+				// Get API config from profile name
+				const profileName = this.serviceConfig.profileName
+				return await this.getApiConfigFromProfile(profileName)
+			} else {
+				// Get config from VS Code settings
+				const vsConfig = await vscode.workspace.getConfiguration("roo-cline.ocr-api")
+				const configName = vsConfig.get<string>("configuration-name")
+				if (!configName) {
+					throw new Error("No configuration profile specified in VS Code settings")
+				}
+				return await this.getApiConfigFromProfile(configName)
 			}
-			// TODO: Implement getting API config from configuration name
-			return {} as ApiConfiguration
+		} catch (error) {
+			logger.error("Failed to load API configuration", { error })
+			throw new Error("Failed to load API configuration")
 		}
+	}
+
+	private async getApiConfigFromProfile(profileName: string): Promise<ApiConfiguration> {
+		// Get configurations from the secrets storage
+		const secretsKey = "roo_cline_config_api_config"
+		const configs =
+			(await vscode.workspace.getConfiguration().get<{
+				[key: string]: ApiConfiguration
+			}>(secretsKey)) || {}
+
+		if (!configs[profileName]) {
+			throw new Error(`Configuration profile '${profileName}' not found`)
+		}
+
+		return configs[profileName]
 	}
 
 	private async ensureApiConfig(): Promise<void> {
@@ -95,7 +123,7 @@ export class OcrService {
 	}
 
 	getOcrPrompt(type: "basic" | "tables" | "layout" | "analysis", document: DocumentContent): string {
-		const { systemPrompt, userTemplates } = this.config.textProcessing
+		const { systemPrompt, userTemplates } = this.baseConfig.textProcessing
 
 		// Select template based on type
 		const template = userTemplates[type]
@@ -104,13 +132,46 @@ export class OcrService {
 		return `${systemPrompt}\n\n${template}`
 	}
 
+	private async getModelInfo(): Promise<ModelInfo | undefined> {
+		if (!this.apiConfig) {
+			throw new Error("API configuration not loaded")
+		}
+
+		const config = this.apiConfig
+		switch (config.apiProvider) {
+			case "mistral":
+				const modelId = config.apiModelId || mistralDefaultModelId
+				return modelId in mistralModels ? mistralModels[modelId as MistralModelId] : undefined
+
+			default:
+				// For other providers, check their model info
+				if (config.apiProvider === "glama" && config.glamaModelInfo) {
+					return config.glamaModelInfo
+				} else if (config.apiProvider === "openrouter" && config.openRouterModelInfo) {
+					return config.openRouterModelInfo
+				} else if (config.apiProvider === "openai" && config.openAiCustomModelInfo) {
+					return config.openAiCustomModelInfo
+				}
+				return undefined
+		}
+	}
+
 	async processDocument(document: DocumentContent, options: ProcessOptions = {}): Promise<DocumentOutput> {
 		try {
 			logger.info("Processing document", { options })
 
+			// Ensure API configuration is loaded
+			await this.ensureApiConfig()
+
+			// Check if the model supports OCR
+			const modelInfo = await this.getModelInfo()
+			if (!modelInfo?.documentProcessing?.supported) {
+				throw new Error("Selected model does not support OCR")
+			}
+
 			const { analyze = false, visualize = false, vizType = "layout" } = options
 
-			// TODO: Implement actual document processing
+			// TODO: Implement actual document processing using this.apiConfig
 			const output: DocumentOutput = {
 				markdown: "", // Placeholder for actual OCR text
 				structure: analyze

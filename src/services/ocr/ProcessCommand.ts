@@ -1,10 +1,28 @@
 import * as vscode from "vscode"
 import { OcrService } from "./OcrService"
-import { ProcessOptions } from "./types"
+import { ProcessOptions, OcrServiceConfig } from "./types"
 import { logger } from "../../utils/logging"
 
 export class ProcessCommand {
-	constructor(private readonly ocrService: OcrService) {}
+	private ocrService: OcrService
+
+	constructor(config: OcrServiceConfig) {
+		this.ocrService = new OcrService(config)
+	}
+
+	static async createForVSCode(): Promise<ProcessCommand> {
+		return new ProcessCommand({
+			type: "vscode",
+			vsCodeConfig: { configurationName: "" }, // Will be loaded from settings
+		})
+	}
+
+	static async createForChat(profileName: string): Promise<ProcessCommand> {
+		return new ProcessCommand({
+			type: "profile",
+			profileName,
+		})
+	}
 
 	async execute(uri: vscode.Uri, options: ProcessOptions = {}): Promise<void> {
 		try {

@@ -50,6 +50,46 @@
 	],
 	"main": "./dist/extension.js",
 	"contributes": {
+		"taskDefinitions": [
+			{
+				"type": "ocr",
+				"required": [
+					"source",
+					"label",
+					"options"
+				],
+				"properties": {
+					"source": {
+						"type": "string",
+						"description": "Source of images (directory, URL, etc.)"
+					},
+					"label": {
+						"type": "string",
+						"description": "Display name of the task"
+					},
+					"options": {
+						"type": "object",
+						"properties": {
+							"extractTables": {
+								"type": "boolean",
+								"description": "Detect and extract tables",
+								"default": false
+							},
+							"analyzeLayout": {
+								"type": "boolean",
+								"description": "Analyze document layout",
+								"default": false
+							},
+							"generateVisuals": {
+								"type": "boolean",
+								"description": "Generate visual representations",
+								"default": false
+							}
+						}
+					}
+				}
+			}
+		],
 		"viewsContainers": {
 			"activitybar": [
 				{

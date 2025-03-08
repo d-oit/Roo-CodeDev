@@ -39,11 +39,9 @@ export type OcrServiceConfig =
 
 export interface ProcessOptions {
 	save?: boolean
-	format?: "markdown" | "text"
-	visualize?: boolean
-	vizType?: "layout" | "sections" | "tables"
-	analyze?: boolean
-	chunks?: boolean
+	extractTables?: boolean
+	analyzeLayout?: boolean
+	generateVisuals?: boolean
 }
 
 export interface ModelSelectionUi {

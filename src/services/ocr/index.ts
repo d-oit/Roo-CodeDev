@@ -1,11 +1,13 @@
 import { OcrService } from "./OcrService"
 import { ProcessCommand } from "./ProcessCommand"
+import { OCRTaskProvider } from "./tasks/OCRTaskProvider"
 import * as vscode from "vscode"
 import { logger } from "../../utils/logging"
 
 export { OcrService } from "./OcrService"
 export { ProcessCommand } from "./ProcessCommand"
 export * from "./types"
+export { OCRTaskProvider } from "./tasks/OCRTaskProvider"
 
 export async function activateOcrFeatures(context: vscode.ExtensionContext): Promise<void> {
 	try {
@@ -14,8 +16,11 @@ export async function activateOcrFeatures(context: vscode.ExtensionContext): Pro
 		// Create process command for VS Code
 		const processCommand = await ProcessCommand.createForVSCode()
 
-		// Remove the duplicate registration here since it's handled in registerCommands.ts
-		// await processCommand.registerCommand(context)
+		// Register OCR task provider
+		const taskProvider = new OCRTaskProvider()
+		context.subscriptions.push(vscode.tasks.registerTaskProvider(OCRTaskProvider.OCR_TYPE, taskProvider))
+
+		logger.info("Registered OCR task provider")
 
 		// Register configuration change handler
 		context.subscriptions.push(
@@ -25,8 +30,8 @@ export async function activateOcrFeatures(context: vscode.ExtensionContext): Pro
 					// Recreate process command with new configuration
 					ProcessCommand.createForVSCode()
 						.then((newCommand) => {
-							// Remove duplicate registration here as well
-							// newCommand.registerCommand(context)
+							// Configuration updated
+							logger.info("OCR process command updated")
 						})
 						.catch((error) => {
 							logger.error("Failed to recreate process command", { error })

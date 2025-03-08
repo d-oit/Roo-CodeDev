@@ -13,7 +13,9 @@ export async function activateOcrFeatures(context: vscode.ExtensionContext): Pro
 
 		// Create process command for VS Code
 		const processCommand = await ProcessCommand.createForVSCode()
-		await processCommand.registerCommand(context)
+
+		// Remove the duplicate registration here since it's handled in registerCommands.ts
+		// await processCommand.registerCommand(context)
 
 		// Register configuration change handler
 		context.subscriptions.push(
@@ -23,16 +25,15 @@ export async function activateOcrFeatures(context: vscode.ExtensionContext): Pro
 					// Recreate process command with new configuration
 					ProcessCommand.createForVSCode()
 						.then((newCommand) => {
-							newCommand.registerCommand(context)
+							// Remove duplicate registration here as well
+							// newCommand.registerCommand(context)
 						})
 						.catch((error) => {
-							logger.error("Failed to update OCR command after config change", { error })
+							logger.error("Failed to recreate process command", { error })
 						})
 				}
 			}),
 		)
-
-		logger.info("OCR features activated successfully")
 	} catch (error) {
 		logger.error("Failed to activate OCR features", { error })
 		throw error

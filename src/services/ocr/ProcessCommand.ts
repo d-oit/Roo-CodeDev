@@ -49,13 +49,35 @@ export class ProcessCommand {
 			})
 
 			if (result.visualizations) {
-				// TODO: Implement visualization display
 				logger.info("Document visualizations available", {
 					types: Object.keys(result.visualizations),
 				})
 			}
 		} catch (error) {
 			logger.error("Error executing process command", { error })
+
+			let errorMessage = "Failed to process document"
+
+			if (error instanceof Error) {
+				if (error.message.includes("No configuration profile specified")) {
+					errorMessage =
+						"OCR configuration not found. Please configure an OCR-capable API profile in VS Code settings (File > Preferences > Settings > Roo Code OCR API)."
+				} else if (error.message.includes("does not support OCR")) {
+					errorMessage =
+						"The selected model does not support OCR. Please ensure you're using the 'mistral-ocr-latest' model in your API configuration."
+				} else if (error.message.includes("Failed to load API configuration")) {
+					errorMessage = "Failed to load API configuration. Please check your API key and profile settings."
+				} else {
+					errorMessage = `Processing failed: ${error.message}`
+				}
+			}
+
+			// Show error message to user
+			await vscode.window.showErrorMessage(errorMessage, {
+				modal: true,
+				detail: "For help, see the OCR setup guide in the documentation.",
+			})
+
 			throw error
 		}
 	}

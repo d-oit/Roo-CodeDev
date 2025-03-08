@@ -38,16 +38,21 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	const sidebarProvider = new ClineProvider(context, outputChannel)
 
-	// Activate OCR features
-	activateOcrFeatures(context)
+	// Register commands first (includes OCR command registration)
+	await registerCommands({
+		context,
+		outputChannel,
+		provider: sidebarProvider,
+	})
+
+	// Then activate OCR features (without command registration)
+	await activateOcrFeatures(context)
 
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(ClineProvider.sideBarId, sidebarProvider, {
 			webviewOptions: { retainContextWhenHidden: true },
 		}),
 	)
-
-	registerCommands({ context, outputChannel, provider: sidebarProvider })
 
 	/**
 	 * We use the text document content provider API to show the left side for diff

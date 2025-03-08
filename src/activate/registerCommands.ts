@@ -1,7 +1,7 @@
 import * as vscode from "vscode"
 import delay from "delay"
 import { ClineProvider } from "../core/webview/ClineProvider"
-import { activateOcrFeatures } from "../services/ocr"
+import { ProcessCommand } from "../services/ocr"
 
 export type RegisterCommandOptions = {
 	context: vscode.ExtensionContext
@@ -12,9 +12,11 @@ export type RegisterCommandOptions = {
 export const registerCommands = async (options: RegisterCommandOptions) => {
 	const { context, outputChannel } = options
 
-	// Register OCR features
-	await activateOcrFeatures(context)
+	// Register OCR command
+	const processCommand = await ProcessCommand.createForVSCode()
+	await processCommand.registerCommand(context)
 
+	// Register other commands
 	for (const [command, callback] of Object.entries(getCommandsMap(options))) {
 		context.subscriptions.push(vscode.commands.registerCommand(command, callback))
 	}

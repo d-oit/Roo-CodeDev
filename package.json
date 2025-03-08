@@ -262,6 +262,19 @@
 					],
 					"description": "Commands that can be auto-executed when 'Always approve execute operations' is enabled"
 				},
+				"roo-cline.ocr-api": {
+					"type": "object",
+					"properties": {
+						"configuration-name": {
+							"type": "string",
+							"description": "Name of the API configuration profile to use for OCR features"
+						}
+					},
+					"description": "Configuration for OCR API features",
+					"required": [
+						"configuration-name"
+					]
+				},
 				"roo-cline.vsCodeLmModelSelector": {
 					"type": "object",
 					"properties": {

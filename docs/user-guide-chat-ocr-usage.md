@@ -70,11 +70,10 @@ Example commands:
 
 Options available in chat:
 
-- `--save`: Save output as markdown
-- `--format`: Choose output format (markdown/text)
-- `--visualize`: Generate visualizations
-- `--analyze`: Perform detailed analysis
-- `--chunks`: Process large documents in chunks
+- `--extractTables`: Enable table detection and extraction
+- `--analyzeLayout`: Enable document layout analysis
+- `--generateVisuals`: Generate visual representations of document structure
+- `--save`: Save output as markdown file
 
 ### Via Command Palette
 
@@ -149,11 +148,13 @@ Results can be handled in multiple ways:
     - For chat interface: Organize profiles by use case (e.g., "OCR-General", "OCR-Code", etc.)
     - Keep OCR-capable profiles separate from general chat profiles
 
-2. **Model Selection**
+2. **Model Selection and Configuration**
 
-    - Choose models with appropriate OCR capabilities for your needs
-    - Consider using specialized OCR models (e.g., mistral-ocr-latest) for better results
-    - Check model capabilities before processing (text extraction, table detection, etc.)
+    - Currently, OCR capabilities require specific Mistral API access
+    - Contact Mistral support to verify OCR model availability for your account
+    - Check your API configuration to ensure you have access to document processing features
+    - Monitor the Mistral documentation for updates on OCR model availability
+    - Test your configuration with a simple document before processing important files
 
 3. **Document Preparation**
 
@@ -185,22 +186,32 @@ For Chat Interface:
 2. Try selecting a different profile that has an OCR-enabled model
 3. If needed, create a new profile with an OCR-capable model in the API Options UI
 
+### Model Availability Issues
+
+If you encounter "Invalid model" errors:
+
+1. Check if you have access to Mistral's OCR capabilities
+2. Verify your API key has the correct permissions
+3. Contact Mistral support to confirm OCR model availability
+4. Check the extension's Output panel ("OCR Tasks") for detailed error information
+
 ### Processing Issues
 
 If you encounter processing problems:
 
-1. Check both OCR and text model configurations
-2. Verify document format and quality
-3. Try adjusting the text model temperature
+1. Check your document format (only PDF, JPEG, and PNG are supported)
+2. Verify document quality and size
+3. Review the OCR Tasks output channel for detailed error messages
+4. Ensure your API configuration is correct
 
-### Processing Large Documents
+### Configuration Troubleshooting
 
-For large documents:
+If OCR features aren't working:
 
-1. Use the `--chunks` option in chat interface
-2. Be patient during processing
-3. Watch the progress indicators
-4. Check the Output panel for detailed progress
+1. Open VS Code's Output panel and select "OCR Tasks"
+2. Check for any configuration or API-related errors
+3. Verify your Mistral API key is correctly configured
+4. Try processing a small test document to validate your setup
 
 ## Keyboard Shortcuts
 
@@ -235,6 +246,7 @@ Configuration options in VS Code settings:
 }
 
 // Note: For chat interface OCR features, simply select a profile
+
 
 // that uses an OCR-capable model in the API Options UI
 ```

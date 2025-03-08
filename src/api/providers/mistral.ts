@@ -14,6 +14,17 @@ import { convertToMistralMessages } from "../transform/mistral-format"
 import { ApiStream } from "../transform/stream"
 import * as vscode from "vscode"
 
+interface OCRResponseVisualizations {
+	layout?: string
+	sections?: string
+	tables?: string[]
+}
+
+interface OCRResponseData {
+	text: string
+	visualizations?: OCRResponseVisualizations
+}
+
 const MISTRAL_DEFAULT_TEMPERATURE = 0
 
 class DocumentProcessingError extends Error {
@@ -262,33 +273,61 @@ export class MistralHandler implements ApiHandler {
 		this.logDebug(`Processing document with options: ${JSON.stringify(options)}`)
 
 		try {
-			const systemPrompt = this.getDocumentProcessingPrompt(options)
 			const base64Data =
 				document.type === "base64" ? document.data : await this.fetchAndEncodeImage(document.data)
 
-			const response = await this.client.chat.complete({
+			// Process with OCR based on document type
+			const ocrResponse = await this.client.ocr.process({
 				model: model.id,
-				messages: [
-					{ role: "system", content: this.getDocumentProcessingPrompt(options) },
-					{
-						role: "user",
-						content: `[Document to process: data:${document.mimeType};base64,${base64Data}]
-
-Please analyze this document and provide a well-formatted markdown representation.`,
-					},
-				],
-				temperature: 0,
+				document: document.mimeType.startsWith("image/")
+					? {
+							type: "image_url" as const,
+							imageUrl:
+								document.type === "base64"
+									? `data:${document.mimeType};base64,${base64Data}`
+									: document.data,
+						}
+					: {
+							type: "document_url" as const,
+							documentUrl:
+								document.type === "base64"
+									? `data:${document.mimeType};base64,${base64Data}`
+									: document.data,
+						},
 			})
 
-			const content = response.choices?.[0]?.message?.content
-			const markdown = typeof content === "string" ? content : ""
+			const extractedResult = ocrResponse as unknown as { data: OCRResponseData }
+			if (!extractedResult.data?.text) {
+				throw new DocumentProcessingError("No text content extracted from document")
+			}
+
+			// Use text model to understand and format the content
+			const textModelResponse = await this.client.chat.complete({
+				model: this.options.apiModelId || mistralDefaultModelId,
+				messages: [
+					{
+						role: "system",
+						content: `Format the document content as markdown, preserving structure and formatting.${
+							options?.extractTables ? "\nEnsure tables are properly formatted in markdown." : ""
+						}${options?.analyzeLayout ? "\nMaintain the original document layout." : ""}`,
+					},
+					{
+						role: "user",
+						content: extractedResult.data.text,
+					},
+				],
+				temperature: this.options.modelTemperature ?? 0,
+			})
+
+			const content = textModelResponse.choices?.[0]?.message?.content
+			const markdown = Array.isArray(content)
+				? content.map((chunk) => (chunk.type === "text" ? chunk.text : "")).join("")
+				: content || ""
 
 			return {
 				markdown,
 				structure: this.extractStructure(markdown),
-				...(options?.generateVisuals && model.info.documentProcessing.capabilities.visualization
-					? { visualizations: await this.generateVisualizations(document) }
-					: {}),
+				visualizations: extractedResult.data.visualizations,
 			}
 		} catch (error) {
 			this.logDebug(`Document processing error: ${error instanceof Error ? error.message : String(error)}`)
@@ -296,15 +335,6 @@ Please analyze this document and provide a well-formatted markdown representatio
 				`Failed to process document: ${error instanceof Error ? error.message : String(error)}`,
 			)
 		}
-	}
-
-	private getDocumentProcessingPrompt(options?: { extractTables?: boolean; analyzeLayout?: boolean }): string {
-		return `You are a document processing assistant. Your task is to:
-1. Extract and format all text content
-2. ${options?.extractTables ? "Detect and preserve table structures" : ""}
-3. ${options?.analyzeLayout ? "Preserve document layout and structure" : ""}
-4. Generate well-formatted markdown output
-Please maintain the document's original structure and formatting as much as possible.`
 	}
 
 	private async fetchAndEncodeImage(url: string): Promise<string> {
@@ -346,86 +376,5 @@ Please maintain the document's original structure and formatting as much as poss
 		}
 
 		return structure
-	}
-
-	/**
-	 * Generate visual representations of the document structure.
-	 * This includes layout analysis and section relationships.
-	 *
-	 * @param document - The document to visualize
-	 * @returns Object containing base64-encoded visualizations, or undefined if visualization is not supported
-	 * @private
-	 */
-	private async generateVisualizations(document: DocumentContent): Promise<DocumentOutput["visualizations"]> {
-		const model = this.getModel()
-		if (!model.info.documentProcessing?.capabilities.visualization) {
-			return undefined
-		}
-
-		try {
-			const base64Data =
-				document.type === "base64" ? document.data : await this.fetchAndEncodeImage(document.data)
-
-			// Generate layout visualization
-			const layoutResponse = await this.client.chat.complete({
-				model: model.id,
-				messages: [
-					{
-						role: "system",
-						content:
-							"Analyze the document layout and return a visualization that highlights the document structure.",
-					},
-					{
-						role: "user",
-						content: `[Document to analyze: data:${document.mimeType};base64,${base64Data}]`,
-					},
-				],
-				temperature: 0,
-			})
-
-			// Generate sections visualization
-			const sectionsResponse = await this.client.chat.complete({
-				model: model.id,
-				messages: [
-					{
-						role: "system",
-						content: "Create a visual representation of the document's sections and their relationships.",
-					},
-					{
-						role: "user",
-						content: `[Document to analyze: data:${document.mimeType};base64,${base64Data}]`,
-					},
-				],
-				temperature: 0,
-			})
-
-			// Extract visualizations from responses
-			const layout = this.extractVisualizationFromResponse(layoutResponse)
-			const sections = this.extractVisualizationFromResponse(sectionsResponse)
-
-			return {
-				layout,
-				sections,
-				// Tables visualization will be added when supported by Mistral
-				tables: [],
-			}
-		} catch (error) {
-			this.logDebug(`Visualization generation error: ${error instanceof Error ? error.message : String(error)}`)
-			return undefined
-		}
-	}
-
-	private extractVisualizationFromResponse(response: any): string | undefined {
-		try {
-			const content = response.choices?.[0]?.message?.content
-			if (typeof content === "string") {
-				// Extract base64 image data from content
-				const match = content.match(/data:image\/[^;]+;base64,([^"'\s]+)/)
-				return match?.[1]
-			}
-			return undefined
-		} catch {
-			return undefined
-		}
 	}
 }

@@ -36,49 +36,53 @@ interface ApiModel {
 
 ## Model Selection Flow
 
-### 1. OCR Model Selection
+### Model Configuration
 
-The OCR feature uses the API provider's existing model list, looking for models with OCR capabilities:
+The system uses a single text model (default: mistral-small-latest) for both document processing and text understanding:
 
 ```typescript
 interface ApiModel {
 	id: string
 	name: string
-	ocr?: boolean // Indicates if model supports OCR
+	documentProcessing?: {
+		supported: boolean
+		capabilities: {
+			textExtraction: boolean
+			tableDetection: boolean
+			layoutAnalysis: boolean
+			visualization: boolean
+		}
+	}
 	// ... other model properties
 }
 ```
 
-- Any model with `ocr: true` can be selected as the OCR model
-- Selection is done through the existing API Options UI
-- Uses provider's standard model selection interface
+Key points:
 
-### 2. Text Model Selection
-
-When an OCR-capable model is selected, a second model must be configured for text processing:
-
-- Any model from the provider can be selected as the text model
-- Temperature setting only applies to the text model
-- Text model handles the semantic understanding of extracted content
+- The text model handles both OCR and content processing
+- Default model (mistral-small-latest) supports document processing
+- Temperature setting applies to text understanding phase
+- Model selection uses standard API Options UI
+- No separate OCR model needed
 
 ## User Interface Integration
 
 ### API Options Panel
 
-1. Primary Model Selection
+1. Model Selection
 
     - Shows provider's model list
-    - Models with OCR capability are marked
-    - Selecting an OCR model enables text model selection
+    - Document processing capability indicated for supported models
+    - Default model (mistral-small-latest) has document processing enabled
 
-2. Text Model Configuration (appears when OCR model selected)
-    - Model selection dropdown
-    - Temperature control (0.0 - 1.0)
-    - Only shown when OCR model is active
+2. Model Configuration
+    - Temperature control (0.0 - 1.0) affects text understanding
+    - Standard model configuration options
+    - No additional configuration needed for document processing
 
 ### Feature Visibility
 
-Commands and UI elements are only visible when OCR API is configured:
+Commands and UI elements are available when using a model with document processing support:
 
 1. Chat Commands:
 

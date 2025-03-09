@@ -25,12 +25,8 @@ Supported input types:
 ```typescript
 interface OcrApiConfig {
 	provider: string
-	model: string // Selected model must have ocr: true
-	temperature: number
-	ocrTextModel?: {
-		id: string
-		temperature: number
-	}
+	model: string // Model with document processing support (default: mistral-small-latest)
+	temperature: number // Applied to text understanding phase
 }
 ```
 
@@ -74,12 +70,23 @@ interface ProcessOptions {
     interface ApiModel {
     	id: string
     	name: string
-    	ocr?: boolean
+    	documentProcessing?: {
+    		supported: boolean
+    		capabilities: {
+    			textExtraction: boolean
+    			tableDetection: boolean
+    			layoutAnalysis: boolean
+    			visualization: boolean
+    		}
+    	}
     }
 
-    function isOcrCapable(model: ApiModel): boolean {
-    	return model.ocr === true
+    function hasDocumentProcessing(model: ApiModel): boolean {
+    	return model.documentProcessing?.supported === true
     }
+
+    // Default model (mistral-small-latest) supports document processing
+    const defaultModel = "mistral-small-latest"
     ```
 
 4. **Process Execution**
@@ -91,13 +98,13 @@ interface ProcessOptions {
     		throw new Error("OCR API not configured")
     	}
 
-    	// Process with OCR model
-    	const rawContent = await processWithOcr(document, config.model)
+    	// Process document and extract content using the configured model
+    	const result = await processWithModel(document, config.model, config.temperature)
 
-    	// Process with text model
-    	const result = await processWithTextModel(rawContent, config.ocrTextModel)
-
+    	// Format and structure the content
     	return formatOutput(result, options)
+
+    	// Note: The same model handles both document processing and text understanding
     }
     ```
 
@@ -128,45 +135,70 @@ Output types supported:
 
 3. **API Integration**
 
-    - OCR API configuration
-    - Model capability checking
-    - Error recovery
+    - Document processing configuration
+    - Model capability validation
+    - Error handling and recovery
 
     Example API integration:
 
     ```typescript
     interface ApiIntegration {
-      async checkOcrSupport(model: ApiModel): Promise<boolean>;
-      async processDocument(content: Buffer): Promise<string>;
-      async analyzeText(
-        text: string,
-        options: TextAnalysisOptions
-      ): Promise<AnalysisResult>;
+      // Check if model supports document processing
+      async checkDocumentProcessingSupport(model: ApiModel): Promise<boolean>;
+
+      // Process document and understand content using the same model
+      async processAndAnalyzeDocument(
+        content: Buffer,
+        options: DocumentProcessingOptions
+      ): Promise<DocumentResult>;
+
+      // The same model handles both document processing and text understanding
+      // No separate OCR model needed
+    }
+
+    interface DocumentProcessingOptions {
+      temperature: number;  // Affects text understanding phase
+      extractTables?: boolean;
+      analyzeLayout?: boolean;
+      generateVisuals?: boolean;
+    }
+
+    interface DocumentResult {
+      text: string;
+      markdown: string;
+      structure?: DocumentStructure;
+      visualizations?: DocumentVisualizations;
     }
     ```
 
 4. **API Configuration UI**
-    - OCR capability indicators in model list
-    - Text model selection when OCR model active
+
+    - Document processing capability indicator in model list
+    - Single model configuration for all features
     - Example:
+
     ```typescript
     interface ModelSelectionUI extends ApiOptionsPanel {
     	// Extends existing API options panel
 
-    	// Additional UI elements for text model when OCR model selected
-    	ocrTextModelSection?: {
-    		visible: boolean
-    		modelSelect: {
-    			label: string
-    			value: string
-    			options: ApiModel[]
+    	// Document processing indicator
+    	documentProcessing?: {
+    		supported: boolean
+    		capabilities: {
+    			textExtraction: boolean
+    			tableDetection: boolean
+    			layoutAnalysis: boolean
+    			visualization: boolean
     		}
-    		temperature: {
-    			label: string
-    			value: number
-    			min: 0
-    			max: 1
-    		}
+    	}
+
+    	// Standard temperature control affects both phases
+    	temperature: {
+    		label: string
+    		value: number
+    		min: 0
+    		max: 1
+    		description: "Controls creativity in text understanding"
     	}
     }
     ```
@@ -174,20 +206,29 @@ Output types supported:
 ### 6. Error Handling
 
 ```typescript
-class OcrError extends Error {
+class DocumentProcessingError extends Error {
 	constructor(
 		message: string,
-		public readonly code: OcrErrorCode,
-		public readonly details?: any,
+		public readonly code: ErrorCode,
+		public readonly context: ErrorContext,
 	) {
 		super(message)
+		this.name = "DocumentProcessingError"
 	}
 }
 
-enum OcrErrorCode {
-	API_NOT_CONFIGURED = "OCR_API_NOT_CONFIGURED",
-	MODEL_NOT_OCR_CAPABLE = "MODEL_NOT_OCR_CAPABLE",
+interface ErrorContext {
+	model: string // The model being used (default: mistral-small-latest)
+	phase: "document_processing" | "text_understanding" // Which phase failed
+	documentType: string // Type of document being processed
+	errorDetails?: any // Additional error information
+}
+
+enum ErrorCode {
+	API_NOT_CONFIGURED = "API_NOT_CONFIGURED",
+	DOCUMENT_PROCESSING_NOT_SUPPORTED = "DOCUMENT_PROCESSING_NOT_SUPPORTED",
 	INVALID_DOCUMENT = "INVALID_DOCUMENT",
 	PROCESSING_FAILED = "PROCESSING_FAILED",
+	TEXT_UNDERSTANDING_FAILED = "TEXT_UNDERSTANDING_FAILED",
 }
 ```

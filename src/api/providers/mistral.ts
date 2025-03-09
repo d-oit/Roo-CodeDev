@@ -27,10 +27,19 @@ interface OCRResponseData {
 
 const MISTRAL_DEFAULT_TEMPERATURE = 0
 
+interface ProcessingErrorContext {
+	phase: "ocr" | "text_understanding"
+	model: string
+	error: string
+}
+
 class DocumentProcessingError extends Error {
-	constructor(message: string) {
+	public readonly context: ProcessingErrorContext
+
+	constructor(message: string, context: ProcessingErrorContext) {
 		super(message)
 		this.name = "DocumentProcessingError"
+		this.context = context
 	}
 }
 
@@ -38,6 +47,13 @@ class UnsupportedDocumentTypeError extends Error {
 	constructor(mimeType: string) {
 		super(`Unsupported document type: ${mimeType}`)
 		this.name = "UnsupportedDocumentTypeError"
+	}
+}
+
+class ModelCapabilityError extends Error {
+	constructor(modelId: string, capability: string) {
+		super(`Model ${modelId} does not support ${capability}`)
+		this.name = "ModelCapabilityError"
 	}
 }
 
@@ -266,19 +282,29 @@ export class MistralHandler implements ApiHandler {
 		},
 	): Promise<DocumentOutput> {
 		const model = this.getModel()
-		if (!model.info.documentProcessing?.supported) {
-			throw new Error("Current model does not support document processing")
+		// Verify OCR model capability
+		if (!mistralModels["mistral-ocr-latest"].documentProcessing?.supported) {
+			throw new ModelCapabilityError("mistral-ocr-latest", "document processing")
 		}
 
-		this.logDebug(`Processing document with options: ${JSON.stringify(options)}`)
+		// Verify text model capability
+		const textModel = model
+		if (!textModel.info.documentProcessing?.supported) {
+			throw new ModelCapabilityError(textModel.id, "document processing")
+		}
+
+		this.logDebug(`Processing document with OCR model: mistral-ocr-latest and text model: ${model.id}`)
+		this.logDebug(`Document processing options: ${JSON.stringify(options)}`)
 
 		try {
+			// Phase 1: OCR Processing
+			this.logDebug("Starting OCR processing phase with mistral-ocr-latest model")
 			const base64Data =
 				document.type === "base64" ? document.data : await this.fetchAndEncodeImage(document.data)
 
-			// Process with OCR based on document type
+			// Process with OCR model
 			const ocrResponse = await this.client.ocr.process({
-				model: model.id,
+				model: "mistral-ocr-latest", // Always use OCR model for document processing
 				document: document.mimeType.startsWith("image/")
 					? {
 							type: "image_url" as const,
@@ -298,10 +324,17 @@ export class MistralHandler implements ApiHandler {
 
 			const extractedResult = ocrResponse as unknown as { data: OCRResponseData }
 			if (!extractedResult.data?.text) {
-				throw new DocumentProcessingError("No text content extracted from document")
+				throw new DocumentProcessingError("No text content extracted from document", {
+					phase: "ocr",
+					model: "mistral-ocr-latest",
+					error: "Empty text content in OCR response",
+				})
 			}
 
-			// Use text model to understand and format the content
+			this.logDebug(`OCR processing completed. Extracted text length: ${extractedResult.data.text.length} chars`)
+
+			// Phase 2: Text Understanding and Formatting
+			this.logDebug(`Starting text processing phase with ${model.id} model`)
 			const textModelResponse = await this.client.chat.complete({
 				model: this.options.apiModelId || mistralDefaultModelId,
 				messages: [
@@ -324,16 +357,24 @@ export class MistralHandler implements ApiHandler {
 				? content.map((chunk) => (chunk.type === "text" ? chunk.text : "")).join("")
 				: content || ""
 
+			this.logDebug(`Text processing completed. Generated markdown length: ${markdown.length} chars`)
+
 			return {
 				markdown,
 				structure: this.extractStructure(markdown),
 				visualizations: extractedResult.data.visualizations,
 			}
 		} catch (error) {
-			this.logDebug(`Document processing error: ${error instanceof Error ? error.message : String(error)}`)
-			throw new DocumentProcessingError(
-				`Failed to process document: ${error instanceof Error ? error.message : String(error)}`,
-			)
+			const errorMsg = error instanceof Error ? error.message : String(error)
+			this.logDebug(`Document processing error: ${errorMsg}`)
+			throw new DocumentProcessingError(`Failed to process document: ${errorMsg}`, {
+				phase: error instanceof Error && error.message.includes("OCR") ? "ocr" : "text_understanding",
+				model:
+					error instanceof Error && error.message.includes("OCR")
+						? "mistral-ocr-latest"
+						: this.options.apiModelId || mistralDefaultModelId,
+				error: errorMsg,
+			})
 		}
 	}
 
@@ -343,9 +384,12 @@ export class MistralHandler implements ApiHandler {
 			const arrayBuffer = await response.arrayBuffer()
 			return Buffer.from(arrayBuffer).toString("base64")
 		} catch (error) {
-			throw new DocumentProcessingError(
-				`Failed to fetch image from URL: ${error instanceof Error ? error.message : String(error)}`,
-			)
+			const errorMsg = error instanceof Error ? error.message : String(error)
+			throw new DocumentProcessingError(`Failed to fetch image from URL: ${errorMsg}`, {
+				phase: "ocr",
+				model: "mistral-ocr-latest",
+				error: `Image fetch failed: ${errorMsg}`,
+			})
 		}
 	}
 

@@ -35,11 +35,11 @@ export interface DocumentOutput {
 	visualizations?: DocumentVisualizations
 }
 
-// Update Mistral models configuration
+// Update Mistral models configuration to include document processing capability
 export const mistralModels = {
-	"mistral-ocr-latest": {
-		name: "Mistral OCR",
-		description: "Document understanding and OCR model",
+	"mistral-small-latest": {
+		name: "Mistral Small",
+		description: "Fast and efficient model for various tasks including document processing",
 		contextWindow: 32768,
 		maxOutputTokens: 4096,
 		documentProcessing: {
@@ -62,7 +62,7 @@ export const mistralModels = {
 export class MistralHandler implements ApiHandler {
 	// ... existing implementation ...
 
-	// Add optional document processing methods
+	// Add document processing capabilities to existing text model
 	async processDocument?(
 		input: DocumentInput,
 		options?: {
@@ -77,17 +77,28 @@ export class MistralHandler implements ApiHandler {
 			throw new Error("Current model does not support document processing")
 		}
 
-		// Implementation using Mistral's document understanding capabilities
-		return this.client.documents.process({
-			model: model.id,
+		// Process using the configured text model (default: mistral-small-latest)
+		// This model handles both OCR and text understanding
+		const result = await this.client.documents.process({
+			model: this.options.apiModelId || mistralDefaultModelId,
 			input,
 			options,
 		})
+
+		// Extract and format content using the same model
+		const formattedResult = await this.formatContent(result, options)
+
+		return formattedResult
 	}
 
-	private async visualizeDocument?(result: DocumentOutput): Promise<DocumentVisualizations> {
-		// Implementation using Mistral's visualization capabilities
-		// Based on cookbook examples
+	private async formatContent(result: any, options?: any): Promise<DocumentOutput> {
+		// Format and structure the extracted content using the same model
+		// Uses standard text processing capabilities
+		return {
+			markdown: result.text,
+			structure: this.extractStructure(result.text),
+			visualizations: result.visualizations,
+		}
 	}
 }
 ```

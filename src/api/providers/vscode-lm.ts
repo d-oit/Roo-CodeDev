@@ -276,12 +276,29 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			this.disposable.dispose()
 			this.disposable = null
 		}
-		if (this.modelCache) {
+
+		// Reset model cache
+		if (this.modelCache && typeof this.modelCache.clear === "function") {
 			this.modelCache.clear()
+		} else {
+			// Reinitialize the cache if it's invalid
+			this.modelCache = new LRU<string, vscode.LanguageModelChat>({
+				max: 10,
+				ttl: 1000 * 60 * 5, // 5 minutes
+			})
 		}
-		if (this.tokenCache) {
+
+		// Reset token cache
+		if (this.tokenCache && typeof this.tokenCache.clear === "function") {
 			this.tokenCache.clear()
+		} else {
+			// Reinitialize the token cache if it's invalid
+			this.tokenCache = new LRU<string, number>({
+				max: 1000,
+				ttl: 1000 * 60 * 60, // 1 hour
+			})
 		}
+
 		this.clientInitPromise = null
 		if (this.currentRequestCancellation) {
 			this.currentRequestCancellation.dispose()

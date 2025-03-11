@@ -3,15 +3,34 @@ import { Mistral } from "@mistralai/mistralai"
 import { SingleCompletionHandler } from "../"
 import { ApiHandlerOptions, mistralDefaultModelId, MistralModelId, mistralModels, ModelInfo } from "../../shared/api"
 import { convertToMistralMessages } from "../transform/mistral-format"
-import { ApiStream } from "../transform/stream"
+import { ApiStreamChunk } from "../transform/stream"
 import { BaseProvider } from "./base-provider"
 import * as vscode from "vscode"
 
 const MISTRAL_DEFAULT_TEMPERATURE = 0
+const NO_CONTENT_TIMEOUT = 10000 // 10 seconds with no new content
+const MAX_RETRIES = 3 // Maximum number of retries for failed requests
+
+interface TextContent {
+	type: "text"
+	text: string
+}
+
+interface ImageURLContent {
+	type: "image_url"
+	url: string
+}
+
+type MistralContent = string | (TextContent | ImageURLContent)[]
+
+type MistralMessage = {
+	role: "system" | "user" | "assistant" | "tool"
+	content: string
+}
 
 export class MistralHandler extends BaseProvider implements SingleCompletionHandler {
-	protected options: ApiHandlerOptions
 	private client: Mistral
+	protected options: ApiHandlerOptions
 	private readonly enableDebugOutput: boolean
 	private readonly outputChannel?: vscode.OutputChannel
 	private cachedModel: { id: MistralModelId; info: ModelInfo; forModelId: string | undefined } | null = null
@@ -25,47 +44,56 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 			throw new Error("Mistral API key is required")
 		}
 
-		// Clear cached model if options change
 		this.cachedModel = null
-
-		// Set default model ID if not provided
 		this.options = {
 			...options,
 			apiModelId: options.apiModelId || mistralDefaultModelId,
 		}
 
-		const config = vscode.workspace.getConfiguration("roo-cline")
-		this.enableDebugOutput = config.get<boolean>("debug.mistral", false)
+		try {
+			const config = vscode.workspace.getConfiguration("roo-cline")
+			this.enableDebugOutput = config?.get<boolean>("debug.mistral") || false
+		} catch {
+			this.enableDebugOutput = false
+		}
 
 		if (this.enableDebugOutput) {
-			if (!MistralHandler.sharedOutputChannel) {
-				MistralHandler.sharedOutputChannel = vscode.window.createOutputChannel(MistralHandler.outputChannelName)
+			try {
+				if (!MistralHandler.sharedOutputChannel) {
+					MistralHandler.sharedOutputChannel = vscode.window.createOutputChannel(
+						MistralHandler.outputChannelName,
+					)
+				}
+				this.outputChannel = MistralHandler.sharedOutputChannel
+			} catch {
+				// Ignore output channel creation errors in tests
 			}
-			this.outputChannel = MistralHandler.sharedOutputChannel
 		}
 
 		const baseUrl = this.getBaseUrl()
 		this.logDebug(`MistralHandler using baseUrl: ${baseUrl}`)
 
-		const logger = {
-			group: (message: string) => this.logDebug(`Group: ${message}`),
-			groupEnd: () => this.logDebug("GroupEnd"),
-			log: (...args: any[]) => {
-				const formattedArgs = args
-					.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : arg))
-					.join(" ")
-				this.logDebug(formattedArgs)
-			},
-		}
+		const logger = this.enableDebugOutput
+			? {
+					group: (message: string) => this.logDebug(`Group: ${message}`),
+					groupEnd: () => this.logDebug("GroupEnd"),
+					log: (...args: any[]) => {
+						const formattedArgs = args
+							.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : arg))
+							.join(" ")
+						this.logDebug(formattedArgs)
+					},
+				}
+			: undefined
 
 		this.client = new Mistral({
 			serverURL: baseUrl,
 			apiKey: this.options.mistralApiKey,
-			debugLogger: this.enableDebugOutput ? logger : undefined,
+			debugLogger: logger,
 		})
 	}
 
-	private logDebug(message: string | object) {
+	private logDebug(message: string | object): void {
 		if (this.enableDebugOutput && this.outputChannel) {
 			const formattedMessage = typeof message === "object" ? JSON.stringify(message, null, 2) : message
 			this.outputChannel.appendLine(`[Roo Code] ${formattedMessage}`)
@@ -81,97 +109,22 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		return "https://api.mistral.ai"
 	}
 
-	override async *createMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream {
-		this.logDebug(`Creating message with system prompt: ${systemPrompt}`)
-
-		const response = await this.client.chat.stream({
-			model: this.options.apiModelId || mistralDefaultModelId,
-			messages: [{ role: "system", content: systemPrompt }, ...convertToMistralMessages(messages)],
-			maxTokens: this.options.includeMaxTokens ? this.getModel().info.maxTokens : undefined,
-			temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
-			stream: this.options.mistralModelStreamingEnabled !== false,
-			...(this.options.stopToken?.trim() && { stop: [this.options.stopToken] }),
-		})
-
-		let completeContent = ""
-		let isComplete = false
-
-		let hasYieldedUsage = false
-
-		for await (const chunk of response) {
-			const delta = chunk.data.choices[0]?.delta
-
-			if (delta?.content) {
-				let content: string = ""
-				if (typeof delta.content === "string") {
-					content = delta.content
-				} else if (Array.isArray(delta.content)) {
-					content = delta.content.map((c) => (c.type === "text" ? c.text : "")).join("")
-				}
-				completeContent += content
-				yield {
-					type: "text",
-					text: content,
-				}
-			}
-
-			if (chunk.data.usage) {
-				hasYieldedUsage = true
-				this.logDebug(`Complete content: ${completeContent}`)
-				this.logDebug(
-					`Usage - Input tokens: ${chunk.data.usage.promptTokens}, Output tokens: ${chunk.data.usage.completionTokens}`,
-				)
-				yield {
-					type: "usage",
-					inputTokens: chunk.data.usage.promptTokens || 0,
-					outputTokens: chunk.data.usage.completionTokens || 0,
-				}
-			}
-
-			// Check for completion at the end of each chunk
-			if (chunk.data.choices[0]?.finishReason) {
-				isComplete = true
-				break
-			}
-		}
-
-		// Always yield a final empty chunk when stream is complete
-		if (isComplete) {
-			// Yield usage if we haven't already
-			if (completeContent && !hasYieldedUsage) {
-				this.logDebug(`Final content: ${completeContent}`)
-				yield {
-					type: "usage",
-					inputTokens: 0,
-					outputTokens: 0,
-				}
-			}
-
-			// Yield completion signal
-			yield {
-				type: "text",
-				text: "",
-			}
-		}
-	}
-
-	override getModel(): { id: MistralModelId; info: ModelInfo } {
-		// Check if cache exists and is for the current model
+	public override getModel(): { id: MistralModelId; info: ModelInfo } {
 		if (this.cachedModel && this.cachedModel.forModelId === this.options.apiModelId) {
+			this.logDebug(`Using cached model: ${this.cachedModel.id}`)
 			return {
 				id: this.cachedModel.id,
 				info: this.cachedModel.info,
 			}
 		}
 
-		const modelId = this.options.apiModelId
-		if (modelId && modelId in mistralModels) {
-			const id = modelId as MistralModelId
+		if (this.options.apiModelId && this.options.apiModelId in mistralModels) {
+			const id = this.options.apiModelId as MistralModelId
 			this.logDebug(`Using model: ${id}`)
 			this.cachedModel = {
 				id,
 				info: mistralModels[id],
-				forModelId: modelId,
+				forModelId: this.options.apiModelId,
 			}
 			return {
 				id: this.cachedModel.id,
@@ -191,29 +144,137 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		}
 	}
 
+	private extractText(content: MistralContent): string {
+		if (typeof content === "string") {
+			return content
+		}
+		return content
+			.filter((chunk): chunk is TextContent => chunk.type === "text")
+			.map((chunk) => chunk.text)
+			.join("")
+	}
+
+	override async *createMessage(
+		systemPrompt: string,
+		messages: Anthropic.Messages.MessageParam[],
+	): AsyncGenerator<ApiStreamChunk> {
+		this.logDebug(`Creating message with system prompt: ${systemPrompt}`)
+
+		let retryCount = 0
+		while (retryCount < MAX_RETRIES) {
+			try {
+				const model = this.getModel()
+				const mistralMessages = [
+					{ role: "system" as const, content: systemPrompt },
+					...convertToMistralMessages(messages),
+				]
+
+				const streamParams = {
+					model: model.id,
+					messages: mistralMessages,
+					maxTokens: model.info.maxTokens,
+					temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
+					stream: this.options.mistralModelStreamingEnabled !== false,
+					...(this.options.stopToken?.trim() && { stop: [this.options.stopToken] }),
+				}
+
+				this.logDebug("Streaming with params: " + JSON.stringify(streamParams, null, 2))
+
+				const response = await this.client.chat.stream(streamParams)
+
+				let completeContent = ""
+				let hasYieldedUsage = false
+				let lastContentTime = Date.now()
+				let hasTimedOut = false
+
+				const noContentInterval = setInterval(() => {
+					if (Date.now() - lastContentTime > NO_CONTENT_TIMEOUT) {
+						this.logDebug("No content timeout reached")
+						hasTimedOut = true
+					}
+				}, 1000)
+
+				try {
+					for await (const chunk of response) {
+						if (hasTimedOut) break
+
+						const delta = chunk.data.choices[0]?.delta
+						if (delta?.content) {
+							lastContentTime = Date.now()
+							const textContent = this.extractText(delta.content as MistralContent)
+							completeContent += textContent
+							yield { type: "text", text: textContent }
+						}
+
+						if (chunk.data.usage && !hasYieldedUsage) {
+							hasYieldedUsage = true
+							this.logDebug(
+								`Usage - Input tokens: ${chunk.data.usage.promptTokens}, Output tokens: ${chunk.data.usage.completionTokens}`,
+							)
+							yield {
+								type: "usage",
+								inputTokens: chunk.data.usage.promptTokens || 0,
+								outputTokens: chunk.data.usage.completionTokens || 0,
+							}
+						}
+
+						if (chunk.data.choices[0]?.finishReason) {
+							break
+						}
+					}
+
+					if (completeContent.length === 0) {
+						yield { type: "text", text: "No response generated." }
+					}
+
+					if (!hasYieldedUsage) {
+						yield {
+							type: "usage",
+							inputTokens: 0,
+							outputTokens: completeContent.length,
+						}
+					}
+
+					clearInterval(noContentInterval)
+					return
+				} catch (streamError) {
+					clearInterval(noContentInterval)
+					throw streamError
+				}
+			} catch (error) {
+				retryCount++
+				this.logDebug(
+					`Stream error (attempt ${retryCount}): ${error instanceof Error ? error.message : "Unknown error"}`,
+				)
+
+				if (retryCount === MAX_RETRIES) {
+					throw new Error("API Error: Failed to create message after multiple attempts")
+				}
+
+				await new Promise((resolve) => setTimeout(resolve, 1000 * retryCount))
+			}
+		}
+	}
+
 	async completePrompt(prompt: string): Promise<string> {
 		try {
-			this.logDebug(`Completing prompt: ${prompt}`)
 			const response = await this.client.chat.complete({
 				model: this.options.apiModelId || mistralDefaultModelId,
-				messages: [{ role: "user", content: prompt }],
+				messages: [{ role: "user" as const, content: prompt }],
 				temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
+				stream: false,
 			})
 
-			const content = response.choices?.[0]?.message.content
-			if (Array.isArray(content)) {
-				const result = content.map((c) => (c.type === "text" ? c.text : "")).join("")
-				this.logDebug(`Completion result: ${result}`)
-				return result
+			if (!response?.choices?.[0]?.message?.content) {
+				throw new Error("Invalid response format")
 			}
-			this.logDebug(`Completion result: ${content}`)
-			return content || ""
+
+			return this.extractText(response.choices[0].message.content as MistralContent)
 		} catch (error) {
 			if (error instanceof Error) {
-				this.logDebug(`Completion error: ${error.message}`)
-				throw new Error(`Mistral completion error: ${error.message}`, { cause: error })
+				throw new Error(`Mistral completion error: ${error.message}`)
 			}
-			throw error
+			throw new Error("Unknown error occurred during Mistral completion")
 		}
 	}
 }

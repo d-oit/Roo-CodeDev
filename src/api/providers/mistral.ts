@@ -3,13 +3,25 @@ import { Mistral } from "@mistralai/mistralai"
 import { SingleCompletionHandler } from "../"
 import { ApiHandlerOptions, mistralDefaultModelId, MistralModelId, mistralModels, ModelInfo } from "../../shared/api"
 import { convertToMistralMessages } from "../transform/mistral-format"
-import { ApiStreamChunk } from "../transform/stream"
+import { ApiStream, ApiStreamChunk } from "../transform/stream"
 import { BaseProvider } from "./base-provider"
 import * as vscode from "vscode"
 
 const MISTRAL_DEFAULT_TEMPERATURE = 0
+const STREAM_TIMEOUT = 30000 // 30 seconds timeout
 const NO_CONTENT_TIMEOUT = 10000 // 10 seconds with no new content
 const MAX_RETRIES = 3 // Maximum number of retries for failed requests
+const RATE_LIMIT_PERCENTAGE_THRESHOLD = 20 // Show warning when less than 20% remaining
+const RATE_LIMIT_ABSOLUTE_THRESHOLD = 5 // And less than 5 requests remaining
+const WARNING_COOLDOWN = 60000 // Only show warning once per minute
+
+// Mistral API rate limit header names
+const HEADERS = {
+	REMAINING_MINUTE: "x-mistral-ratelimit-remaining",
+	LIMIT_MINUTE: "x-mistral-ratelimit-limit",
+	REMAINING_DAY: "x-mistral-ratelimit-reset",
+	LIMIT_DAY: "x-mistral-ratelimit-reset",
+} as const
 
 interface TextContent {
 	type: "text"
@@ -34,9 +46,13 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 	private readonly enableDebugOutput: boolean
 	private readonly outputChannel?: vscode.OutputChannel
 	private cachedModel: { id: MistralModelId; info: ModelInfo; forModelId: string | undefined } | null = null
-
+	private lastWarningTime = 0
 	private static readonly outputChannelName = "Roo Code Mistral"
 	private static sharedOutputChannel: vscode.OutputChannel | undefined
+	private lastSystemPrompt: string | undefined
+	private lastMessages: string | undefined
+	private accumulatedInputTokens = 0
+	private accumulatedOutputTokens = 0
 
 	constructor(options: ApiHandlerOptions) {
 		super()
@@ -93,10 +109,12 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		})
 	}
 
-	private logDebug(message: string | object): void {
+	private logDebug(...messages: (string | object)[]): void {
 		if (this.enableDebugOutput && this.outputChannel) {
-			const formattedMessage = typeof message === "object" ? JSON.stringify(message, null, 2) : message
-			this.outputChannel.appendLine(`[Roo Code] ${formattedMessage}`)
+			const formattedMessages = messages
+				.map((msg) => (typeof msg === "object" ? JSON.stringify(msg, null, 2) : msg))
+				.join(" ")
+			this.outputChannel.appendLine(`[Roo Code] ${formattedMessages}`)
 		}
 	}
 
@@ -107,6 +125,58 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 			return this.options.mistralCodestralUrl || "https://codestral.mistral.ai"
 		}
 		return "https://api.mistral.ai"
+	}
+
+	private checkRateLimits(response: any): void {
+		// Log the full response headers for debugging
+		this.logDebug("Full response headers:", response.headers || {})
+
+		const headers = response.headers || {}
+
+		const headerEntries = {
+			remainingMinute: parseInt(
+				headers[HEADERS.REMAINING_MINUTE] ??
+					headers["remaining"] ??
+					headers["x-ratelimit-remaining-minute"] ??
+					"0",
+				10,
+			),
+			limitMinute: parseInt(
+				headers[HEADERS.LIMIT_MINUTE] ?? headers["limit"] ?? headers["x-ratelimit-limit-minute"] ?? "0",
+				10,
+			),
+			remainingDay: headers[HEADERS.REMAINING_DAY] ?? headers["x-ratelimit-remaining-day"] ?? "unknown",
+			limitDay: headers[HEADERS.LIMIT_DAY] ?? headers["x-ratelimit-limit-day"] ?? "unknown",
+		}
+
+		// Log rate limit information
+		this.logDebug("Rate limit headers:", headerEntries)
+		this.logDebug(`Rate limits - Minute: ${headerEntries.remainingMinute}/${headerEntries.limitMinute}`)
+		this.logDebug(`Rate limits - Daily: ${headerEntries.remainingDay}/${headerEntries.limitDay}`)
+
+		// Only check rate limits if we have valid values
+		if (headerEntries.limitMinute > 0) {
+			const remainingPercentage = (headerEntries.remainingMinute / headerEntries.limitMinute) * 100
+			const currentTime = Date.now()
+
+			if (
+				remainingPercentage <= RATE_LIMIT_PERCENTAGE_THRESHOLD &&
+				headerEntries.remainingMinute <= RATE_LIMIT_ABSOLUTE_THRESHOLD &&
+				currentTime - this.lastWarningTime >= WARNING_COOLDOWN
+			) {
+				this.logDebug(`WARNING: Approaching rate limit (${remainingPercentage.toFixed(1)}% remaining)`)
+				try {
+					vscode.window.showWarningMessage(
+						`Approaching Mistral API rate limit: ${headerEntries.remainingMinute} requests remaining out of ${headerEntries.limitMinute} per minute`,
+					)
+					this.lastWarningTime = currentTime
+				} catch {
+					// Ignore VS Code API errors
+				}
+			}
+		} else {
+			this.logDebug("No valid rate limit values found in headers")
+		}
 	}
 
 	public override getModel(): { id: MistralModelId; info: ModelInfo } {
@@ -144,6 +214,15 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		}
 	}
 
+	private convertMessageToContentBlocks(
+		message: Anthropic.Messages.MessageParam,
+	): Anthropic.Messages.ContentBlockParam[] {
+		if (typeof message.content === "string") {
+			return [{ type: "text", text: message.content }]
+		}
+		return message.content
+	}
+
 	private extractText(content: MistralContent): string {
 		if (typeof content === "string") {
 			return content
@@ -159,6 +238,23 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		messages: Anthropic.Messages.MessageParam[],
 	): AsyncGenerator<ApiStreamChunk> {
 		this.logDebug(`Creating message with system prompt: ${systemPrompt}`)
+
+		const messagesKey = JSON.stringify(messages)
+		if (systemPrompt === this.lastSystemPrompt && messagesKey === this.lastMessages) {
+			this.logDebug("Duplicate prompt detected, using cached response")
+			return
+		}
+
+		this.lastSystemPrompt = systemPrompt
+		this.lastMessages = messagesKey
+
+		const inputContentBlocks: Anthropic.Messages.ContentBlockParam[] = [
+			{ type: "text", text: systemPrompt },
+			...messages.flatMap((msg) => this.convertMessageToContentBlocks(msg)),
+		]
+
+		this.accumulatedInputTokens = await this.countTokens(inputContentBlocks)
+		this.logDebug(`Input tokens: ${this.accumulatedInputTokens}`)
 
 		let retryCount = 0
 		while (retryCount < MAX_RETRIES) {
@@ -178,9 +274,12 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 					...(this.options.stopToken?.trim() && { stop: [this.options.stopToken] }),
 				}
 
-				this.logDebug("Streaming with params: " + JSON.stringify(streamParams, null, 2))
+				this.logDebug("Streaming with params:", streamParams)
 
 				const response = await this.client.chat.stream(streamParams)
+
+				// Check rate limits after successful response
+				this.checkRateLimits(response)
 
 				let completeContent = ""
 				let hasYieldedUsage = false
@@ -204,6 +303,9 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 							const textContent = this.extractText(delta.content as MistralContent)
 							completeContent += textContent
 							yield { type: "text", text: textContent }
+
+							const outputTokenCount = await this.countTokens([{ type: "text", text: textContent }])
+							this.accumulatedOutputTokens += outputTokenCount
 						}
 
 						if (chunk.data.usage && !hasYieldedUsage) {
@@ -213,8 +315,8 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 							)
 							yield {
 								type: "usage",
-								inputTokens: chunk.data.usage.promptTokens || 0,
-								outputTokens: chunk.data.usage.completionTokens || 0,
+								inputTokens: chunk.data.usage.promptTokens || this.accumulatedInputTokens,
+								outputTokens: chunk.data.usage.completionTokens || this.accumulatedOutputTokens,
 							}
 						}
 
@@ -230,8 +332,8 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 					if (!hasYieldedUsage) {
 						yield {
 							type: "usage",
-							inputTokens: 0,
-							outputTokens: completeContent.length,
+							inputTokens: this.accumulatedInputTokens,
+							outputTokens: this.accumulatedOutputTokens,
 						}
 					}
 
@@ -244,7 +346,8 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 			} catch (error) {
 				retryCount++
 				this.logDebug(
-					`Stream error (attempt ${retryCount}): ${error instanceof Error ? error.message : "Unknown error"}`,
+					`Stream error (attempt ${retryCount}):`,
+					error instanceof Error ? error.message : "Unknown error",
 				)
 
 				if (retryCount === MAX_RETRIES) {
@@ -264,6 +367,9 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 				temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
 				stream: false,
 			})
+
+			// Check rate limits after successful response
+			this.checkRateLimits(response)
 
 			if (!response?.choices?.[0]?.message?.content) {
 				throw new Error("Invalid response format")

@@ -8,8 +8,7 @@ import { BaseProvider } from "./base-provider"
 import * as vscode from "vscode"
 
 const MISTRAL_DEFAULT_TEMPERATURE = 0
-const STREAM_TIMEOUT = 30000 // 30 seconds timeout
-const NO_CONTENT_TIMEOUT = 10000 // 10 seconds with no new content
+const NO_CONTENT_TIMEOUT = 30000 // 30 seconds with no new content
 const MAX_RETRIES = 3 // Maximum number of retries for failed requests
 const RATE_LIMIT_PERCENTAGE_THRESHOLD = 20 // Show warning when less than 20% remaining
 const RATE_LIMIT_ABSOLUTE_THRESHOLD = 5 // And less than 5 requests remaining
@@ -17,10 +16,10 @@ const WARNING_COOLDOWN = 60000 // Only show warning once per minute
 
 // Mistral API rate limit header names
 const HEADERS = {
-	REMAINING_MINUTE: "x-mistral-ratelimit-remaining",
-	LIMIT_MINUTE: "x-mistral-ratelimit-limit",
-	REMAINING_DAY: "x-mistral-ratelimit-reset",
-	LIMIT_DAY: "x-mistral-ratelimit-reset",
+	REMAINING_MINUTE: "x-ratelimit-remaining-minute",
+	LIMIT_MINUTE: "x-ratelimit-limit-minute",
+	REMAINING_DAY: "x-ratelimit-remaining-day",
+	LIMIT_DAY: "x-ratelimit-limit-day",
 } as const
 
 interface TextContent {
@@ -34,11 +33,6 @@ interface ImageURLContent {
 }
 
 type MistralContent = string | (TextContent | ImageURLContent)[]
-
-type MistralMessage = {
-	role: "system" | "user" | "assistant" | "tool"
-	content: string
-}
 
 export class MistralHandler extends BaseProvider implements SingleCompletionHandler {
 	private client: Mistral
@@ -212,15 +206,6 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		}
 	}
 
-	private convertMessageToContentBlocks(
-		message: Anthropic.Messages.MessageParam,
-	): Anthropic.Messages.ContentBlockParam[] {
-		if (typeof message.content === "string") {
-			return [{ type: "text", text: message.content }]
-		}
-		return message.content
-	}
-
 	private extractText(content: MistralContent): string {
 		if (typeof content === "string") {
 			return content
@@ -248,7 +233,11 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 
 		const inputContentBlocks: Anthropic.Messages.ContentBlockParam[] = [
 			{ type: "text", text: systemPrompt },
-			...messages.flatMap((msg) => this.convertMessageToContentBlocks(msg)),
+			...messages
+				.map((msg) =>
+					typeof msg.content === "string" ? { type: "text" as const, text: msg.content } : msg.content,
+				)
+				.flat(),
 		]
 
 		this.accumulatedInputTokens = await this.countTokens(inputContentBlocks)
@@ -274,7 +263,9 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 
 				this.logDebug("Streaming with params:", streamParams)
 
+				this.logDebug("Initiating stream request...")
 				const response = await this.client.chat.stream(streamParams)
+				this.logDebug("Stream connection established")
 
 				// Check rate limits after successful response
 				this.checkRateLimits(response)
@@ -283,6 +274,7 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 				let hasYieldedUsage = false
 				let lastContentTime = Date.now()
 				let hasTimedOut = false
+				let chunkCount = 0
 
 				const noContentInterval = setInterval(() => {
 					if (Date.now() - lastContentTime > NO_CONTENT_TIMEOUT) {
@@ -293,17 +285,35 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 
 				try {
 					for await (const chunk of response) {
-						if (hasTimedOut) break
+						if (hasTimedOut) {
+							this.logDebug("Stream timed out, breaking loop")
+							break
+						}
+
+						chunkCount++
+						this.logDebug(`Processing chunk #${chunkCount}`)
 
 						const delta = chunk.data.choices[0]?.delta
-						if (delta?.content) {
+						if (!delta) {
+							this.logDebug(`Chunk #${chunkCount} has no delta`)
+							continue
+						}
+
+						if (delta.content) {
 							lastContentTime = Date.now()
 							const textContent = this.extractText(delta.content as MistralContent)
+							this.logDebug(
+								`Received content in chunk #${chunkCount}: "${textContent.substring(0, 50)}${textContent.length > 50 ? "..." : ""}"`,
+							)
+
 							completeContent += textContent
 							yield { type: "text", text: textContent }
 
 							const outputTokenCount = await this.countTokens([{ type: "text", text: textContent }])
 							this.accumulatedOutputTokens += outputTokenCount
+							this.logDebug(`Updated output tokens: ${this.accumulatedOutputTokens}`)
+						} else {
+							this.logDebug(`Chunk #${chunkCount} has delta but no content`)
 						}
 
 						if (chunk.data.usage && !hasYieldedUsage) {
@@ -323,11 +333,19 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 						}
 					}
 
+					this.logDebug(
+						`Stream completed. Total chunks: ${chunkCount}, Content length: ${completeContent.length}`,
+					)
+
 					if (completeContent.length === 0) {
+						this.logDebug("Warning: No content was generated in the response")
 						yield { type: "text", text: "No response generated." }
 					}
 
 					if (!hasYieldedUsage) {
+						this.logDebug(
+							`Yielding final usage stats - Input: ${this.accumulatedInputTokens}, Output: ${this.accumulatedOutputTokens}`,
+						)
 						yield {
 							type: "usage",
 							inputTokens: this.accumulatedInputTokens,
@@ -336,9 +354,19 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 					}
 
 					clearInterval(noContentInterval)
+					this.logDebug("Stream processing completed successfully")
 					return
 				} catch (streamError) {
 					clearInterval(noContentInterval)
+					this.logDebug(
+						"Stream error occurred:",
+						streamError instanceof Error
+							? {
+									message: streamError.message,
+									stack: streamError.stack,
+								}
+							: streamError,
+					)
 					throw streamError
 				}
 			} catch (error) {

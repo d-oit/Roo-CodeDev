@@ -96,6 +96,8 @@ export const GLOBAL_STATE_KEYS = [
 	"modelTemperature",
 	"modelMaxTokens",
 	"mistralCodestralUrl",
+	"mistralModelStreamingEnabled",
+	"stopToken",
 	"maxOpenTabsContext",
 	"browserToolEnabled",
 	"lmStudioSpeculativeDecodingEnabled",

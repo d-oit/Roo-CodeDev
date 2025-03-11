@@ -433,40 +433,81 @@ const ApiOptions = ({
 			)}
 
 			{selectedProvider === "mistral" && (
-				<>
+				<div>
 					<VSCodeTextField
 						value={apiConfiguration?.mistralApiKey || ""}
+						style={{ width: "100%" }}
 						type="password"
 						onInput={handleInputChange("mistralApiKey")}
-						placeholder="Enter API Key..."
-						className="w-full">
-						<span className="font-medium">Mistral API Key</span>
+						placeholder="Enter API Key...">
+						<span style={{ fontWeight: 500 }}>Mistral API Key</span>
 					</VSCodeTextField>
-					<div className="text-sm text-vscode-descriptionForeground -mt-2">
+					<p
+						style={{
+							fontSize: "12px",
+							marginTop: 3,
+							color: "var(--vscode-descriptionForeground)",
+						}}>
 						This key is stored locally and only used to make API requests from this extension.
-					</div>
-					{!apiConfiguration?.mistralApiKey && (
-						<VSCodeButtonLink href="https://console.mistral.ai/" appearance="secondary">
-							Get Mistral / Codestral API Key
-						</VSCodeButtonLink>
-					)}
+						<VSCodeLink
+							href="https://console.mistral.ai/"
+							style={{
+								display: "inline",
+								fontSize: "inherit",
+							}}>
+							You can get a La Plateforme (api.mistral.ai) or Codestral (codestral.mistral.ai) API key by
+							signing up here.
+						</VSCodeLink>
+					</p>
+
 					{(apiConfiguration?.apiModelId?.startsWith("codestral-") ||
 						(!apiConfiguration?.apiModelId && mistralDefaultModelId.startsWith("codestral-"))) && (
-						<>
+						<div>
 							<VSCodeTextField
 								value={apiConfiguration?.mistralCodestralUrl || ""}
+								style={{ width: "100%", marginTop: "10px" }}
 								type="url"
 								onInput={handleInputChange("mistralCodestralUrl")}
-								placeholder="https://codestral.mistral.ai"
-								className="w-full">
-								<span className="font-medium">Codestral Base URL (Optional)</span>
+								placeholder="Default: https://codestral.mistral.ai">
+								<span style={{ fontWeight: 500 }}>Codestral Base URL (Optional)</span>
 							</VSCodeTextField>
-							<div className="text-sm text-vscode-descriptionForeground -mt-2">
-								Set an alternative URL for the Codestral model.
-							</div>
-						</>
+							<p
+								style={{
+									fontSize: "12px",
+									marginTop: 3,
+									color: "var(--vscode-descriptionForeground)",
+								}}>
+								Set alternative URL for Codestral model: https://api.mistral.ai
+							</p>
+						</div>
 					)}
-				</>
+
+					<p>
+						<div style={{ display: "flex", alignItems: "center" }}>
+							<Checkbox
+								checked={apiConfiguration?.mistralModelStreamingEnabled}
+								onChange={handleInputChange("mistralModelStreamingEnabled", noTransform)}>
+								Enable streaming
+							</Checkbox>
+						</div>
+					</p>
+
+					<VSCodeTextField
+						value={apiConfiguration?.stopToken}
+						style={{ width: "100%", marginTop: "10px" }}
+						onInput={handleInputChange("stopToken")}
+						placeholder="Enter stop token (optional)">
+						<span style={{ fontWeight: 500 }}>Optional: Stop Token e.g. \n\n</span>
+					</VSCodeTextField>
+					<p
+						style={{
+							fontSize: "12px",
+							marginTop: 3,
+							color: "var(--vscode-descriptionForeground)",
+						}}>
+						Optional token to stop generation when encountered
+					</p>
+				</div>
 			)}
 
 			{selectedProvider === "bedrock" && (

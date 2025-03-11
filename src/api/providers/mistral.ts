@@ -3,7 +3,7 @@ import { Mistral } from "@mistralai/mistralai"
 import { SingleCompletionHandler } from "../"
 import { ApiHandlerOptions, mistralDefaultModelId, MistralModelId, mistralModels, ModelInfo } from "../../shared/api"
 import { convertToMistralMessages } from "../transform/mistral-format"
-import { ApiStream, ApiStreamChunk } from "../transform/stream"
+import { ApiStreamChunk } from "../transform/stream"
 import { BaseProvider } from "./base-provider"
 import * as vscode from "vscode"
 
@@ -170,9 +170,7 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 						`Approaching Mistral API rate limit: ${headerEntries.remainingMinute} requests remaining out of ${headerEntries.limitMinute} per minute`,
 					)
 					this.lastWarningTime = currentTime
-				} catch {
-					// Ignore VS Code API errors
-				}
+				} catch {}
 			}
 		} else {
 			this.logDebug("No valid rate limit values found in headers")

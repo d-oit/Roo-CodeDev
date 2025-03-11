@@ -77,6 +77,10 @@ export interface ExtensionStateContextType extends ExtensionState {
 	setTelemetrySetting: (value: TelemetrySetting) => void
 	remoteBrowserEnabled?: boolean
 	setRemoteBrowserEnabled: (value: boolean) => void
+	mistralModelStreamingEnabled?: boolean
+	setMistralModelStreamingEnabled: (value: boolean) => void
+	stopToken?: string
+	setStopToken: (value: string) => void
 	machineId?: string
 }
 
@@ -146,6 +150,8 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		browserToolEnabled: true,
 		telemetrySetting: "unset",
 		showRooIgnoredFiles: true, // Default to showing .rooignore'd files with lock symbol (current behavior)
+		mistralModelStreamingEnabled: true, // Default to enabled
+		stopToken: "", // Default to empty string
 	})
 
 	const [didHydrateState, setDidHydrateState] = useState(false)
@@ -289,6 +295,9 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		setTelemetrySetting: (value) => setState((prevState) => ({ ...prevState, telemetrySetting: value })),
 		setShowRooIgnoredFiles: (value) => setState((prevState) => ({ ...prevState, showRooIgnoredFiles: value })),
 		setRemoteBrowserEnabled: (value) => setState((prevState) => ({ ...prevState, remoteBrowserEnabled: value })),
+		setMistralModelStreamingEnabled: (value) =>
+			setState((prevState) => ({ ...prevState, mistralModelStreamingEnabled: value })),
+		setStopToken: (value) => setState((prevState) => ({ ...prevState, stopToken: value })),
 	}
 
 	return <ExtensionStateContext.Provider value={contextValue}>{children}</ExtensionStateContext.Provider>

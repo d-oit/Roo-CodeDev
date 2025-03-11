@@ -1906,6 +1906,17 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 						await this.updateGlobalState("telemetrySetting", telemetrySetting)
 						const isOptedIn = telemetrySetting === "enabled"
 						telemetryService.updateTelemetryState(isOptedIn)
+						break
+					}
+
+					case "mistralModelStreamingEnabled": {
+						await this.updateGlobalState("mistralModelStreamingEnabled", message.bool ?? true)
+						await this.postStateToWebview()
+						break
+					}
+
+					case "stopToken": {
+						await this.updateGlobalState("stopToken", message.text)
 						await this.postStateToWebview()
 						break
 					}
@@ -2498,6 +2509,9 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			...Object.fromEntries(API_CONFIG_KEYS.map((key) => [key, stateValues[key]])),
 			// Add all secrets
 			...secretValues,
+			// Add Mistral-specific settings
+			mistralModelStreamingEnabled: stateValues.mistralModelStreamingEnabled ?? true,
+			stopToken: stateValues.stopToken,
 		}
 
 		// Ensure apiProvider is set properly if not already in state

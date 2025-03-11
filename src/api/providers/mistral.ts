@@ -8,19 +8,11 @@ import { BaseProvider } from "./base-provider"
 import * as vscode from "vscode"
 
 const MISTRAL_DEFAULT_TEMPERATURE = 0
-const NO_CONTENT_TIMEOUT = 30000 // 30 seconds with no new content
+const NO_CONTENT_TIMEOUT = 60000 // 60 seconds with no new content - increased from 30s for slower responses
 const MAX_RETRIES = 3 // Maximum number of retries for failed requests
 const RATE_LIMIT_PERCENTAGE_THRESHOLD = 20 // Show warning when less than 20% remaining
 const RATE_LIMIT_ABSOLUTE_THRESHOLD = 5 // And less than 5 requests remaining
 const WARNING_COOLDOWN = 60000 // Only show warning once per minute
-
-// Mistral API rate limit header names
-const HEADERS = {
-	REMAINING_MINUTE: "x-ratelimit-remaining-minute",
-	LIMIT_MINUTE: "x-ratelimit-limit-minute",
-	REMAINING_DAY: "x-ratelimit-remaining-day",
-	LIMIT_DAY: "x-ratelimit-limit-day",
-} as const
 
 interface TextContent {
 	type: "text"
@@ -43,8 +35,6 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 	private lastWarningTime = 0
 	private static readonly outputChannelName = "Roo Code Mistral"
 	private static sharedOutputChannel: vscode.OutputChannel | undefined
-	private lastSystemPrompt: string | undefined
-	private lastMessages: string | undefined
 	private accumulatedInputTokens = 0
 	private accumulatedOutputTokens = 0
 
@@ -85,6 +75,7 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 
 		const logger = this.enableDebugOutput
 			? {
+					debug: true,
 					group: (message: string) => this.logDebug(`Group: ${message}`),
 					groupEnd: () => this.logDebug("GroupEnd"),
 					log: (...args: any[]) => {
@@ -92,6 +83,21 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 							.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : arg))
 							.join(" ")
 						this.logDebug(formattedArgs)
+					},
+					beforeRequest: (opts: any) => {
+						this.logDebug("Request details:", {
+							url: opts.url,
+							method: opts.method,
+							headers: opts.headers,
+							body: opts.body,
+						})
+					},
+					afterResponse: (response: any) => {
+						this.logDebug("Response details:", {
+							status: response.status,
+							statusText: response.statusText,
+							headers: response.headers,
+						})
 					},
 				}
 			: undefined
@@ -128,19 +134,10 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		const headers = response.headers || {}
 
 		const headerEntries = {
-			remainingMinute: parseInt(
-				headers[HEADERS.REMAINING_MINUTE] ??
-					headers["remaining"] ??
-					headers["x-ratelimit-remaining-minute"] ??
-					"0",
-				10,
-			),
-			limitMinute: parseInt(
-				headers[HEADERS.LIMIT_MINUTE] ?? headers["limit"] ?? headers["x-ratelimit-limit-minute"] ?? "0",
-				10,
-			),
-			remainingDay: headers[HEADERS.REMAINING_DAY] ?? headers["x-ratelimit-remaining-day"] ?? "unknown",
-			limitDay: headers[HEADERS.LIMIT_DAY] ?? headers["x-ratelimit-limit-day"] ?? "unknown",
+			remainingMinute: parseInt(headers["ratelimit-remaining"] || "0", 10),
+			limitMinute: parseInt(headers["ratelimit-limit"] || "0", 10),
+			remainingDay: headers["x-ratelimit-remaining-day"] || "unknown",
+			limitDay: headers["x-ratelimit-limit-day"] || "unknown",
 		}
 
 		// Log rate limit information
@@ -221,15 +218,6 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		messages: Anthropic.Messages.MessageParam[],
 	): AsyncGenerator<ApiStreamChunk> {
 		this.logDebug(`Creating message with system prompt: ${systemPrompt}`)
-
-		const messagesKey = JSON.stringify(messages)
-		if (systemPrompt === this.lastSystemPrompt && messagesKey === this.lastMessages) {
-			this.logDebug("Duplicate prompt detected, using cached response")
-			return
-		}
-
-		this.lastSystemPrompt = systemPrompt
-		this.lastMessages = messagesKey
 
 		const inputContentBlocks: Anthropic.Messages.ContentBlockParam[] = [
 			{ type: "text", text: systemPrompt },

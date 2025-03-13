@@ -4,32 +4,62 @@ import { Anthropic } from "@anthropic-ai/sdk"
 import { ApiStreamTextChunk } from "../../transform/stream"
 
 // Mock Mistral client
-const mockCreate = jest.fn()
-jest.mock("@mistralai/mistralai", () => {
-	return {
-		Mistral: jest.fn().mockImplementation(() => ({
-			chat: {
-				stream: mockCreate.mockImplementation(async (options) => {
-					const stream = {
-						[Symbol.asyncIterator]: async function* () {
-							yield {
-								data: {
-									choices: [
-										{
-											delta: { content: "Test response" },
-											index: 0,
-										},
-									],
+const mockStream = jest.fn()
+jest.mock("@mistralai/mistralai", () => ({
+	Mistral: jest.fn().mockImplementation(() => ({
+		chat: {
+			stream: mockStream.mockImplementation(async () => {
+				const response = {
+					headers: {},
+					status: 200,
+					statusText: "OK",
+				}
+
+				const streamResponse = {
+					response,
+					headers: response.headers,
+					status: response.status,
+					statusText: response.statusText,
+					[Symbol.asyncIterator]: async function* () {
+						yield {
+							data: {
+								choices: [
+									{
+										delta: { content: "Test response" },
+										index: 0,
+									},
+								],
+								usage: {
+									promptTokens: 10,
+									completionTokens: 5,
+									totalTokens: 15,
 								},
-							}
+							},
+						}
+					},
+				}
+
+				return streamResponse
+			}),
+			complete: jest.fn().mockResolvedValue({
+				choices: [
+					{
+						message: {
+							content: "Test response",
+							role: "assistant",
 						},
-					}
-					return stream
-				}),
-			},
-		})),
-	}
-})
+						index: 0,
+					},
+				],
+				usage: {
+					promptTokens: 10,
+					completionTokens: 5,
+					totalTokens: 15,
+				},
+			}),
+		},
+	})),
+}))
 
 describe("MistralHandler", () => {
 	let handler: MistralHandler
@@ -37,13 +67,13 @@ describe("MistralHandler", () => {
 
 	beforeEach(() => {
 		mockOptions = {
-			apiModelId: "codestral-latest", // Update to match the actual model ID
+			apiModelId: "codestral-latest",
 			mistralApiKey: "test-api-key",
 			includeMaxTokens: true,
 			modelTemperature: 0,
 		}
 		handler = new MistralHandler(mockOptions)
-		mockCreate.mockClear()
+		mockStream.mockClear()
 	})
 
 	describe("constructor", () => {
@@ -93,7 +123,7 @@ describe("MistralHandler", () => {
 			const iterator = handler.createMessage(systemPrompt, messages)
 			const result = await iterator.next()
 
-			expect(mockCreate).toHaveBeenCalledWith({
+			expect(mockStream).toHaveBeenCalledWith({
 				model: mockOptions.apiModelId,
 				messages: expect.any(Array),
 				maxTokens: expect.any(Number),
@@ -102,6 +132,7 @@ describe("MistralHandler", () => {
 
 			expect(result.value).toBeDefined()
 			expect(result.done).toBe(false)
+			expect(result.value).toEqual({ type: "text", text: "Test response" })
 		})
 
 		it("should handle streaming response correctly", async () => {
@@ -119,8 +150,24 @@ describe("MistralHandler", () => {
 		})
 
 		it("should handle errors gracefully", async () => {
-			mockCreate.mockRejectedValueOnce(new Error("API Error"))
-			await expect(handler.createMessage(systemPrompt, messages).next()).rejects.toThrow("API Error")
+			mockStream.mockRejectedValueOnce(new Error("API Error"))
+
+			const iterator = handler.createMessage(systemPrompt, messages)
+			await expect(iterator.next()).rejects.toThrow("API Error")
+		})
+
+		it("should handle stream errors", async () => {
+			mockStream.mockImplementationOnce(async () => ({
+				headers: {},
+				status: 200,
+				statusText: "OK",
+				[Symbol.asyncIterator]: async function* () {
+					throw new Error("Stream Error")
+				},
+			}))
+
+			const iterator = handler.createMessage(systemPrompt, messages)
+			await expect(iterator.next()).rejects.toThrow("Stream Error")
 		})
 	})
 })

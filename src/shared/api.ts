@@ -853,7 +853,7 @@ export type MistralModelId = keyof typeof mistralModels
 export const mistralDefaultModelId: MistralModelId = "codestral-latest"
 export const mistralModels = {
 	"codestral-latest": {
-		maxTokens: 256_000,
+		maxTokens: 32_000,
 		contextWindow: 256_000,
 		supportsImages: false,
 		supportsPromptCache: false,
@@ -885,7 +885,7 @@ export const mistralModels = {
 		outputPrice: 0.04,
 	},
 	"mistral-small-latest": {
-		maxTokens: 32_000,
+		maxTokens: 4096,
 		contextWindow: 32_000,
 		supportsImages: false,
 		supportsPromptCache: false,

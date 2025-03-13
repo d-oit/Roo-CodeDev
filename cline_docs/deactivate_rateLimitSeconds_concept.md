@@ -6,22 +6,23 @@ This concept outlines a generic approach to deactivate specific settings based o
 
 ## Steps
 
-1. **Identify the Relevant Code**:
+1. **Identify the Relevant Code**
 
     - Locate the `rateLimitSeconds` setting in the `AdvancedSettings.tsx` file.
     - Understand how it is used and updated.
 
-2. **Create a Generic Concept**:
+2. **Create a Generic Concept**
 
     - Develop a function or utility that can deactivate a specific setting based on the handler's requirements.
     - The function should take the setting name and handler name as parameters.
 
-3. **Implement the Changes**:
+3. **Implement the Changes**
 
     - Modify the `AdvancedSettings` component to use the new function.
     - Ensure the function is called when a handler like Mistral is used.
 
-4. **Test and Validate**:
+4. **Test and Validate**
+
     - Write unit tests to ensure the function works as expected.
     - Test the changes with different handlers to ensure they are applied correctly.
 
@@ -80,10 +81,11 @@ graph TD
     - Test the changes with different handlers to ensure they are applied correctly.
 
 - **Validation**:
+
     - Validate the changes in a development environment.
     - Ensure the changes do not affect other settings or handlers.
 
-## RateLimitHandler Class
+## RateLimitHandler Class as a separate file
 
 The `RateLimitHandler` class is designed to manage rate limits directly using the Mistral SDK. It includes methods to execute requests with rate limiting, update rate limit information, and handle rate limit errors.
 
@@ -144,6 +146,7 @@ To integrate the `RateLimitHandler` with the Mistral SDK, you can follow these s
     - Implement the `updateRateLimitInfo`, `isRateLimitError`, and `getRetryAfterTime` methods based on the Mistral SDK documentation.
 
 3. **Use the RateLimitHandler in the Mistral Provider**:
+
     - Modify the Mistral provider to use the `RateLimitHandler` for executing requests.
 
 ## Example Integration

@@ -1,5 +1,5 @@
 import { Anthropic } from "@anthropic-ai/sdk"
-import { Mistral, MistralClient, ClientConfig } from "@mistralai/mistralai"
+import { Mistral } from "@mistralai/mistralai"
 import { SingleCompletionHandler } from "../"
 import { ApiHandlerOptions, mistralDefaultModelId, MistralModelId, mistralModels, ModelInfo } from "../../shared/api"
 import { convertToMistralMessages } from "../transform/mistral-format"
@@ -7,9 +7,19 @@ import { ApiStreamChunk, ApiStreamTextChunk, ApiStreamUsageChunk } from "../tran
 import { BaseProvider } from "./base-provider"
 import * as vscode from "vscode"
 
+interface RateLimitInfo {
+	remaining: number
+	limit: number
+	reset: number
+	resetDate?: Date
+}
+
 const MISTRAL_DEFAULT_TEMPERATURE = 0
 const NO_CONTENT_TIMEOUT = 60000 // 60 seconds with no new content
 const MAX_RETRIES = 3 // Maximum number of retries for failed requests
+const INITIAL_RETRY_DELAY = 1000 // Initial retry delay in milliseconds
+const MAX_RETRY_DELAY = 32000 // Maximum retry delay in milliseconds
+const JITTER_FACTOR = 0.2 // Jitter factor for randomization (20%)
 const RATE_LIMIT_PERCENTAGE_THRESHOLD = 20 // Show warning when less than 20% remaining
 const RATE_LIMIT_ABSOLUTE_THRESHOLD = 5 // And less than 5 requests remaining
 const WARNING_COOLDOWN = 60000 // Only show warning once per minute
@@ -35,7 +45,7 @@ type MistralContent = string | (TextContent | ImageURLContent)[]
 
 export class MistralHandler extends BaseProvider implements SingleCompletionHandler {
 	protected options: ApiHandlerOptions
-	private client: MistralClient
+	private client: Mistral
 	private readonly enableDebugOutput: boolean
 	private readonly outputChannel?: vscode.OutputChannel
 	private cachedModel: { id: MistralModelId; info: ModelInfo; forModelId: string | undefined } | null = null
@@ -43,6 +53,7 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 	private static readonly outputChannelName = "Roo Code Mistral"
 	private static sharedOutputChannel: vscode.OutputChannel | undefined
 	private noContentInterval?: NodeJS.Timeout
+	private rateLimitInfo?: RateLimitInfo
 
 	constructor(options: ApiHandlerOptions) {
 		super()
@@ -79,14 +90,11 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		const baseUrl = this.getBaseUrl()
 		this.logDebug(`MistralHandler using baseUrl: ${baseUrl}`)
 
-		// Initialize client with default headers
-		const clientConfig: ClientConfig = {
+		// Initialize with API key and base URL
+		this.client = new Mistral({
 			apiKey: this.options.mistralApiKey,
-			endpoint: baseUrl,
-			defaultHeaders: defaultHeaders,
-		}
-
-		this.client = new Mistral(clientConfig)
+			serverURL: baseUrl,
+		})
 	}
 
 	private logDebug(...messages: (string | object)[]): void {
@@ -107,39 +115,40 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		return "https://api.mistral.ai"
 	}
 
-	private checkRateLimits(headers: Record<string, any> = {}): void {
-		this.logDebug("Full response headers:", headers)
+	private exponentialBackoff(retryCount: number): number {
+		const delay = Math.min(
+			INITIAL_RETRY_DELAY * Math.pow(2, retryCount) * (1 + JITTER_FACTOR * Math.random()),
+			MAX_RETRY_DELAY,
+		)
+		this.logDebug(`Calculated backoff delay: ${delay}ms for retry ${retryCount}`)
+		return delay
+	}
 
-		const headerEntries = {
-			remainingMinute: parseInt(headers["ratelimit-remaining"] || "0", 10),
-			limitMinute: parseInt(headers["ratelimit-limit"] || "0", 10),
-			remainingDay: headers["x-ratelimit-remaining-day"] || "unknown",
-			limitDay: headers["x-ratelimit-limit-day"] || "unknown",
+	private async handleRateLimit(error: Error): Promise<void> {
+		if (error.message.includes("rate limit")) {
+			const retryAfter = 60000 // Default to 1 minute if no specific time provided
+			this.logDebug(`Rate limit hit. Waiting ${retryAfter}ms before retry`)
+			await new Promise((resolve) => setTimeout(resolve, retryAfter))
 		}
+	}
 
-		this.logDebug("Rate limit headers:", headerEntries)
-		this.logDebug(`Rate limits - Minute: ${headerEntries.remainingMinute}/${headerEntries.limitMinute}`)
-		this.logDebug(`Rate limits - Daily: ${headerEntries.remainingDay}/${headerEntries.limitDay}`)
+	private async retryWithBackoff<T>(operation: () => Promise<T>): Promise<T> {
+		let retryCount = 0
 
-		if (headerEntries.limitMinute > 0) {
-			const remainingPercentage = (headerEntries.remainingMinute / headerEntries.limitMinute) * 100
-			const currentTime = Date.now()
+		while (true) {
+			try {
+				return await operation()
+			} catch (error) {
+				if (retryCount >= MAX_RETRIES || !(error instanceof Error)) {
+					throw error
+				}
 
-			if (
-				remainingPercentage <= RATE_LIMIT_PERCENTAGE_THRESHOLD &&
-				headerEntries.remainingMinute <= RATE_LIMIT_ABSOLUTE_THRESHOLD &&
-				currentTime - this.lastWarningTime >= WARNING_COOLDOWN
-			) {
-				this.logDebug(`WARNING: Approaching rate limit (${remainingPercentage.toFixed(1)}% remaining)`)
-				try {
-					vscode.window.showWarningMessage(
-						`Approaching Mistral API rate limit: ${headerEntries.remainingMinute} requests remaining out of ${headerEntries.limitMinute} per minute`,
-					)
-					this.lastWarningTime = currentTime
-				} catch {}
+				await this.handleRateLimit(error)
+				const backoffDelay = this.exponentialBackoff(retryCount)
+				this.logDebug(`Retrying operation after ${backoffDelay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`)
+				await new Promise((resolve) => setTimeout(resolve, backoffDelay))
+				retryCount++
 			}
-		} else {
-			this.logDebug("No valid rate limit values found in headers")
 		}
 	}
 
@@ -221,12 +230,12 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 			}
 
 			this.logDebug("Streaming with params:", streamParams)
-			const response = await this.client.chat.stream(streamParams)
-			this.logDebug("Stream connection established")
 
-			if (response.headers) {
-				this.checkRateLimits(response.headers)
-			}
+			// Use retryWithBackoff for the stream request
+			const response = await this.retryWithBackoff(async () => {
+				return await this.client.chat.stream(streamParams)
+			})
+			this.logDebug("Stream connection established")
 
 			let lastContentTime = Date.now()
 			let hasTimedOut = false
@@ -319,17 +328,20 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		try {
 			const response = await this.client.chat.complete({
 				model: this.options.apiModelId || mistralDefaultModelId,
-				messages: [{ role: "user" as const, content: prompt }],
+				messages: [{ role: "user", content: prompt }],
 				temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
 			})
 
-			if (!response?.choices?.[0]?.message?.content) {
-				throw new Error("Invalid response format")
+			const content = response.choices?.[0]?.message.content
+			if (Array.isArray(content)) {
+				return content.map((c) => (c.type === "text" ? c.text : "")).join("")
 			}
-
-			return this.extractText(response.choices[0].message.content as MistralContent)
+			return content || ""
 		} catch (error) {
-			this.handleError(error)
+			if (error instanceof Error) {
+				throw new Error(`Mistral completion error: ${error.message}`)
+			}
+			throw error
 		}
 	}
 }

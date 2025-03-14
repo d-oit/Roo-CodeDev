@@ -3,27 +3,15 @@ import { Mistral } from "@mistralai/mistralai"
 import { SingleCompletionHandler } from "../"
 import { ApiHandlerOptions, mistralDefaultModelId, MistralModelId, mistralModels, ModelInfo } from "../../shared/api"
 import { convertToMistralMessages } from "../transform/mistral-format"
-import { ApiStreamChunk, ApiStreamTextChunk, ApiStreamUsageChunk } from "../transform/stream"
+import { ApiStreamChunk } from "../transform/stream"
 import { BaseProvider } from "./base-provider"
 import * as vscode from "vscode"
 
-interface RateLimitInfo {
-	remaining: number
-	limit: number
-	reset: number
-	resetDate?: Date
-}
-
 const MISTRAL_DEFAULT_TEMPERATURE = 0
-const NO_CONTENT_TIMEOUT = 60000 // 60 seconds with no new content
 const MAX_RETRIES = 3 // Maximum number of retries for failed requests
 const INITIAL_RETRY_DELAY = 1000 // Initial retry delay in milliseconds
 const MAX_RETRY_DELAY = 32000 // Maximum retry delay in milliseconds
 const JITTER_FACTOR = 0.2 // Jitter factor for randomization (20%)
-const RATE_LIMIT_PERCENTAGE_THRESHOLD = 20 // Show warning when less than 20% remaining
-const RATE_LIMIT_ABSOLUTE_THRESHOLD = 5 // And less than 5 requests remaining
-const WARNING_COOLDOWN = 60000 // Only show warning once per minute
-const MAX_STREAM_ITERATIONS = 1000 // Prevent endless processing
 
 // Define default headers
 export const defaultHeaders = {
@@ -49,11 +37,9 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 	private readonly enableDebugOutput: boolean
 	private readonly outputChannel?: vscode.OutputChannel
 	private cachedModel: { id: MistralModelId; info: ModelInfo; forModelId: string | undefined } | null = null
-	private lastWarningTime = 0
 	private static readonly outputChannelName = "Roo Code Mistral"
 	private static sharedOutputChannel: vscode.OutputChannel | undefined
 	private noContentInterval?: NodeJS.Timeout
-	private rateLimitInfo?: RateLimitInfo
 
 	constructor(options: ApiHandlerOptions) {
 		super()
@@ -152,21 +138,29 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		}
 	}
 
+	private abortController?: AbortController
+
 	private cleanup(): void {
 		if (this.noContentInterval) {
 			clearInterval(this.noContentInterval)
 			this.noContentInterval = undefined
 		}
+		if (this.abortController) {
+			this.abortController.abort()
+			this.abortController = undefined
+		}
 	}
 
-	private handleError(error: Error | unknown): never {
+	private handleError(error: unknown): never {
+		// Convert error to a string or object before logging
+		const errorForLogging = error instanceof Error ? { message: error.message, stack: error.stack } : String(error)
+
+		this.logDebug("Mistral API error:", errorForLogging)
+
 		if (error instanceof Error) {
-			this.logDebug("Error:", error.message)
-			this.logDebug("Stack:", error.stack || "No stack trace")
-			throw error
+			throw new Error(`Mistral API error: ${error.message}`)
 		}
-		this.logDebug("Unknown error:", String(error))
-		throw new Error("Unknown error occurred")
+		throw new Error(`Mistral API error: ${String(error)}`)
 	}
 
 	override getModel(): { id: MistralModelId; info: ModelInfo } {
@@ -221,102 +215,136 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		try {
 			this.logDebug(`Creating message with system prompt: ${systemPrompt}`)
 
+			// Create new abort controller
+			this.cleanup() // Clean up any existing controller
+			this.abortController = new AbortController()
+			const signal = this.abortController.signal
+
+			// Get the model first
 			const model = this.getModel()
+
+			// Calculate a reasonable maxTokens value based on context window and input size
+			const inputMessages = [{ role: "system", content: systemPrompt }, ...convertToMistralMessages(messages)]
+
+			// Estimate input tokens using a simple heuristic
+			let estimatedInputTokens = 0
+			try {
+				// Convert messages to a string and use a character-based estimation
+				const messageText = inputMessages
+					.map((msg) => {
+						if (typeof msg.content === "string") {
+							return msg.content
+						} else if (Array.isArray(msg.content)) {
+							return msg.content
+								.map((c) => (typeof c === "string" ? c : c.type === "text" ? c.text : ""))
+								.join("")
+						}
+						return ""
+					})
+					.join(" ")
+
+				// Rough estimate: 1 token ≈ 4 characters for English text
+				estimatedInputTokens = Math.ceil(messageText.length / 4)
+				this.logDebug(`Estimated input tokens (character-based): ${estimatedInputTokens}`)
+			} catch (error) {
+				this.logDebug("Error estimating token count:", error)
+				// Default to a conservative estimate if calculation fails
+				estimatedInputTokens = Math.floor(model.info.contextWindow * 0.5)
+			}
+
+			// Reserve 20% of context window for output by default, or use a configured value
+			const contextWindow = model.info.contextWindow
+			const reservedForOutput = this.options.modelMaxTokens || Math.floor(contextWindow * 0.2)
+
+			// Ensure we don't exceed the model's capabilities
+			const safeMaxTokens = Math.min(
+				reservedForOutput,
+				model.info.maxTokens || reservedForOutput,
+				Math.max(100, contextWindow - estimatedInputTokens), // Ensure at least 100 tokens for output
+			)
+
 			const streamParams = {
 				model: model.id,
 				messages: [{ role: "system" as const, content: systemPrompt }, ...convertToMistralMessages(messages)],
-				maxTokens: this.options.includeMaxTokens ? model.info.maxTokens : undefined,
+				maxTokens: this.options.includeMaxTokens ? safeMaxTokens : undefined,
 				temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
+				stream: this.options.mistralModelStreamingEnabled,
+				signal, // Add abort signal
 			}
 
 			this.logDebug("Streaming with params:", streamParams)
 
-			// Use retryWithBackoff for the stream request
 			const response = await this.retryWithBackoff(async () => {
+				if (signal.aborted) {
+					throw new Error("Stream aborted before start")
+				}
 				return await this.client.chat.stream(streamParams)
 			})
+
 			this.logDebug("Stream connection established")
-
-			let lastContentTime = Date.now()
-			let hasTimedOut = false
-			let iterationCount = 0
 			let hasYieldedUsage = false
-
-			this.cleanup()
-			this.noContentInterval = setInterval(() => {
-				if (Date.now() - lastContentTime > NO_CONTENT_TIMEOUT) {
-					this.logDebug("No content timeout reached")
-					hasTimedOut = true
-				}
-			}, 1000)
 
 			try {
 				for await (const chunk of response) {
-					if (hasTimedOut || iterationCount >= MAX_STREAM_ITERATIONS) {
-						this.logDebug(
-							hasTimedOut
-								? "Stream timed out, breaking loop"
-								: "Max iterations reached, breaking loop to prevent endless processing",
-						)
+					// Check for abortion at start of each iteration
+					if (signal.aborted) {
+						this.logDebug("Stream aborted during processing")
+						return
+					}
+
+					// Check finish reason first
+					if (chunk.data?.choices[0]?.finishReason) {
+						this.logDebug(`Stream finished with reason: ${chunk.data.choices[0].finishReason}`)
 						break
 					}
 
-					iterationCount++
-					this.logDebug(`Processing chunk #${iterationCount}`)
-
-					const delta = chunk.data.choices[0]?.delta
-					if (!delta) {
-						this.logDebug(`Chunk #${iterationCount} has no delta`)
+					if (!chunk.data) {
+						this.logDebug("Received empty chunk")
 						continue
 					}
 
-					if (delta.content) {
-						lastContentTime = Date.now()
+					const delta = chunk.data.choices[0]?.delta
+					if (delta?.content) {
 						const textContent = this.extractText(delta.content as MistralContent)
 						this.logDebug(
-							`Received content in chunk #${iterationCount}: "${textContent.substring(0, 50)}${
-								textContent.length > 50 ? "..." : ""
-							}"`,
+							`Received content: "${textContent.substring(0, 50)}${textContent.length > 50 ? "..." : ""}"`,
 						)
-
-						const textChunk: ApiStreamTextChunk = { type: "text", text: textContent }
-						yield textChunk
-					} else {
-						this.logDebug(`Chunk #${iterationCount} has delta but no content`)
+						yield { type: "text", text: textContent }
 					}
 
+					// Handle usage metrics if present
 					if (chunk.data.usage && !hasYieldedUsage) {
 						hasYieldedUsage = true
 						this.logDebug(
 							`Usage - Input tokens: ${chunk.data.usage.promptTokens}, Output tokens: ${chunk.data.usage.completionTokens}`,
 						)
-						const usageChunk: ApiStreamUsageChunk = {
+						yield {
 							type: "usage",
 							inputTokens: chunk.data.usage.promptTokens || 0,
 							outputTokens: chunk.data.usage.completionTokens || 0,
 						}
-						yield usageChunk
-					}
-
-					if (chunk.data.choices[0]?.finishReason) {
-						break
 					}
 				}
 
-				if (!hasYieldedUsage) {
-					const usageChunk: ApiStreamUsageChunk = {
+				// Yield final usage if not done yet
+				if (!hasYieldedUsage && !signal.aborted) {
+					yield {
 						type: "usage",
 						inputTokens: 0,
 						outputTokens: 0,
 					}
-					yield usageChunk
 				}
 
 				this.cleanup()
-				this.logDebug("Stream processing completed successfully")
+				this.logDebug("Stream completed successfully")
 			} catch (error) {
 				this.cleanup()
-				this.handleError(error)
+				if (signal.aborted) {
+					this.logDebug("Stream aborted due to error:", error)
+					return
+				}
+				this.logDebug("Stream error occurred:", error)
+				throw error
 			}
 		} catch (error) {
 			this.cleanup()

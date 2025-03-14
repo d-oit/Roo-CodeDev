@@ -1,5 +1,24 @@
 # Concept for Deactivating `rateLimitSeconds` Based on API Handlers
 
+## UI Visualization Strategy
+
+```mermaid
+graph TD
+    A[API Handler] --> B{Check Rate Limit}
+    B -->|Active| C[Display Status Indicator]
+    B -->|Inactive| D[Show Default State]
+    C --> E[Yellow Indicator + Tooltip]
+    D --> F[Gray Indicator]
+```
+
+**Implementation Notes**:
+
+- Visual indicator positioned adjacent to rate limit controls in AdvancedSettings
+- Real-time synchronization with rate limit state management
+- Contextual tooltip showing "Active rate limiting" or "No active limits"
+- Color coding: Yellow (active), Gray (inactive)
+- Inherits existing state management infrastructure
+
 ## Overview
 
 This concept outlines a generic approach to deactivate specific settings based on the API handler being used. The goal is to create a reusable function that can be applied to different handlers. This includes the integration of the `RateLimitHandler` class to manage rate limits directly using the Mistral SDK.

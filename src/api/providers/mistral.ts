@@ -46,6 +46,13 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 	private static readonly outputChannelName = "Roo Code Mistral"
 	private static sharedOutputChannel: vscode.OutputChannel | undefined
 	private noContentInterval?: NodeJS.Timeout
+	private lastYieldedContent: string = ""
+	private loopDetectionCount: number = 0
+	private MAX_LOOP_ITERATIONS: number = 5
+	private patternDetectionBuffer: string = "" // Add this to track patterns
+	private repetitivePatternBuffer = ""
+	private repetitivePatternThreshold = 3 // How many repetitions before we consider it a problem
+	private maxPatternLength = 20 // Maximum pattern length to check
 
 	constructor(options: ApiHandlerOptions) {
 		super()
@@ -276,6 +283,7 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 				messages: [{ role: "system" as const, content: systemPrompt }, ...convertToMistralMessages(messages)],
 				temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
 				stream: this.options.mistralModelStreamingEnabled,
+				maxTokens: safeMaxTokens,
 				signal, // Add abort signal
 			}
 
@@ -291,6 +299,8 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 			this.logDebug("Stream connection established")
 			let hasYieldedUsage = false
 			let accumulatedText = "" // Variable to accumulate response text
+			const startTime = Date.now()
+			const MAX_STREAM_DURATION_MS = 60000 // 1 minute max
 
 			try {
 				for await (const chunk of response) {
@@ -300,8 +310,15 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 						return
 					}
 
-					// Log the structure of the chunk to debug
+					// Enhanced debugging - log the entire chunk structure
+					this.logDebug(`Chunk received: ${JSON.stringify(chunk, null, 2)}`)
 					this.logDebug(`Chunk keys: ${Object.keys(chunk || {}).join(", ")}`)
+
+					// If chunk has data property, log its structure too
+					if (chunk.data) {
+						this.logDebug(`Chunk.data keys: ${Object.keys(chunk.data || {}).join(", ")}`)
+						this.logDebug(`Chunk.data structure: ${JSON.stringify(chunk.data, null, 2)}`)
+					}
 
 					// Handle usage metrics if present at the top level
 					if (!hasYieldedUsage && chunk && "usage" in chunk && chunk.usage) {
@@ -310,7 +327,7 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 
 						hasYieldedUsage = true
 						this.logDebug(
-							`Usage - Input tokens: ${usage.prompt_tokens}, Output tokens: ${usage.completion_tokens}`,
+							`Usage found - Input tokens: ${usage.prompt_tokens}, Output tokens: ${usage.completion_tokens}`,
 						)
 
 						yield {
@@ -322,6 +339,20 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 
 					// Continue with the existing delta content handling
 					if (chunk.data) {
+						// Check for usage information in chunk.data
+						if (!hasYieldedUsage && chunk.data.usage) {
+							hasYieldedUsage = true
+							this.logDebug(
+								`Usage found - Input tokens: ${chunk.data.usage.promptTokens}, Output tokens: ${chunk.data.usage.completionTokens}`,
+							)
+
+							yield {
+								type: "usage",
+								inputTokens: chunk.data.usage.promptTokens || 0,
+								outputTokens: chunk.data.usage.completionTokens || 0,
+							}
+						}
+
 						// Check finish reason first
 						if (chunk.data?.choices[0]?.finishReason) {
 							this.logDebug(`Stream finished with reason: ${chunk.data.choices[0].finishReason}`)
@@ -331,9 +362,80 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 						const delta = chunk.data.choices[0]?.delta
 						if (delta?.content) {
 							const textContent = this.extractText(delta.content as MistralContent)
+
+							// Check if we've been streaming too long
+							if (Date.now() - startTime > MAX_STREAM_DURATION_MS) {
+								this.logDebug(
+									`Stream exceeded maximum duration of ${MAX_STREAM_DURATION_MS}ms, breaking`,
+								)
+								break
+							}
+
+							// Add to our pattern detection buffer
+							this.repetitivePatternBuffer += textContent
+
+							// Keep buffer at a reasonable size
+							if (this.repetitivePatternBuffer.length > 500) {
+								this.repetitivePatternBuffer = this.repetitivePatternBuffer.slice(-500)
+							}
+
+							// Check for repetitive patterns
+							const isRepetitive = this.detectRepetitivePattern(this.repetitivePatternBuffer)
+							if (isRepetitive) {
+								this.loopDetectionCount += 2
+								this.logDebug(`Detected repetitive pattern, count: ${this.loopDetectionCount}`)
+
+								if (this.loopDetectionCount > this.MAX_LOOP_ITERATIONS / 2) {
+									this.logDebug(`Breaking due to excessive repetitive patterns`)
+									break
+								}
+							} else {
+								// Reset counter if no repetition detected
+								this.loopDetectionCount = Math.max(0, this.loopDetectionCount - 1)
+							}
+
+							// Check if this is a repetition of the last content
+							if (textContent === this.lastYieldedContent) {
+								this.logDebug(`Skipping repeated content: "${textContent}"`)
+								this.loopDetectionCount++
+								if (this.loopDetectionCount > this.MAX_LOOP_ITERATIONS) {
+									this.logDebug(
+										`Detected infinite loop after ${this.loopDetectionCount} iterations, breaking`,
+									)
+									break
+								}
+								continue
+							}
+
+							// Reset loop counter if content is different
+							this.loopDetectionCount = 0
+
+							// Add more robust pattern detection
+							this.patternDetectionBuffer += textContent
+							if (this.patternDetectionBuffer.length > 100) {
+								// Check for repeating patterns in last 100 chars
+								const lastChunk = this.patternDetectionBuffer.slice(-100)
+								for (let i = 1; i <= 20; i++) {
+									// Check patterns up to 20 chars
+									const pattern = lastChunk.slice(-i)
+									if (pattern && lastChunk.slice(-2 * i, -i) === pattern && pattern.length > 2) {
+										this.logDebug(`Detected repeating pattern: "${pattern}"`)
+										this.loopDetectionCount += 2
+										if (this.loopDetectionCount > this.MAX_LOOP_ITERATIONS) {
+											this.logDebug(`Breaking due to repeating pattern detection`)
+											break
+										}
+									}
+								}
+								// Trim buffer to prevent memory issues
+								this.patternDetectionBuffer = this.patternDetectionBuffer.slice(-200)
+							}
+
 							this.logDebug(
 								`Received content: "${textContent.substring(0, 50)}${textContent.length > 50 ? "..." : ""}"`,
 							)
+
+							this.lastYieldedContent = textContent
 							accumulatedText += textContent // Accumulate the text
 							yield { type: "text", text: textContent }
 						}
@@ -399,5 +501,63 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 			}
 			throw error
 		}
+	}
+
+	/**
+	 * Detects repetitive patterns in the given text
+	 * @param text The text to check for repetitive patterns
+	 * @returns True if a repetitive pattern is detected
+	 */
+	private detectRepetitivePattern(text: string): boolean {
+		// Don't bother checking if text is too short
+		if (text.length < 10) return false
+
+		// Check for exact repetitions of varying lengths
+		for (let patternLength = 2; patternLength <= this.maxPatternLength; patternLength++) {
+			// Get the most recent pattern of this length
+			const pattern = text.slice(-patternLength)
+
+			// Count how many times this pattern appears consecutively
+			let repetitionCount = 0
+			let position = text.length - patternLength
+
+			while (position >= 0) {
+				const segment = text.slice(position, position + patternLength)
+				if (segment === pattern) {
+					repetitionCount++
+					position -= patternLength
+				} else {
+					break
+				}
+			}
+
+			// If we found enough repetitions, report it
+			if (repetitionCount >= this.repetitivePatternThreshold) {
+				this.logDebug(`Detected pattern "${pattern}" repeated ${repetitionCount} times`)
+				return true
+			}
+		}
+
+		// Check for line-based repetitions (common in code/file listings)
+		const lines = text.split("\n").filter((line) => line.trim().length > 0)
+		if (lines.length >= this.repetitivePatternThreshold) {
+			const lastLine = lines[lines.length - 1]
+			let lineRepetitions = 1
+
+			for (let i = lines.length - 2; i >= 0; i--) {
+				if (lines[i] === lastLine) {
+					lineRepetitions++
+				} else {
+					break
+				}
+			}
+
+			if (lineRepetitions >= this.repetitivePatternThreshold) {
+				this.logDebug(`Detected line "${lastLine}" repeated ${lineRepetitions} times`)
+				return true
+			}
+		}
+
+		return false
 	}
 }

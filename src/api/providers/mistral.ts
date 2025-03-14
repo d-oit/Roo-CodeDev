@@ -380,7 +380,7 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 							}
 
 							// Check for repetitive patterns
-							const isRepetitive = this.detectRepetitivePattern(this.repetitivePatternBuffer)
+							const isRepetitive = false // not working this.detectRepetitivePattern(this.repetitivePatternBuffer)
 							if (isRepetitive) {
 								this.loopDetectionCount += 2
 								this.logDebug(`Detected repetitive pattern, count: ${this.loopDetectionCount}`)

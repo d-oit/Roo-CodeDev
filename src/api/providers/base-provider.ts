@@ -11,6 +11,8 @@ const TOKEN_FUDGE_FACTOR = 1.5
 /**
  * Base class for API providers that implements common functionality
  */
+import * as vscode from "vscode"
+
 export abstract class BaseProvider implements ApiHandler {
 	// Cache the Tiktoken encoder instance since it's stateless
 	private encoder: Tiktoken | null = null
@@ -60,5 +62,31 @@ export abstract class BaseProvider implements ApiHandler {
 
 		// Add a fudge factor to account for the fact that tiktoken is not always accurate
 		return Math.ceil(totalTokens * TOKEN_FUDGE_FACTOR)
+	}
+
+	/**
+	 * Handle rate limit errors by extracting details from the HTTP header and notifying the user.
+	 *
+	 * @param response The HTTP response object
+	 */
+	protected async handleRateLimit(response: Response): Promise<void> {
+		const rateLimitRemaining = response.headers.get("x-rate-limit-remaining")
+		const rateLimitReset = response.headers.get("x-rate-limit-reset")
+
+		if (rateLimitRemaining !== null && rateLimitReset !== null) {
+			const remaining = parseInt(rateLimitRemaining, 10)
+			const resetTime = new Date(parseInt(rateLimitReset, 10) * 1000)
+
+			if (remaining <= 0) {
+				const message = `Rate limit exceeded. Retry after ${resetTime.toLocaleString()}`
+				vscode.window.showErrorMessage(message)
+			} else {
+				const message = `Rate limit almost reached. ${remaining} requests remaining.`
+				vscode.window.showWarningMessage(message)
+			}
+		} else {
+			const message = "Rate limit details not found in the response headers."
+			vscode.window.showErrorMessage(message)
+		}
 	}
 }

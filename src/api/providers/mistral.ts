@@ -110,7 +110,7 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		return delay
 	}
 
-	private async handleRateLimit(error: Error): Promise<void> {
+	private async handleRateLimitError(error: Error): Promise<void> {
 		if (error.message.includes("rate limit")) {
 			const retryAfter = 60000 // Default to 1 minute if no specific time provided
 			this.logDebug(`Rate limit hit. Waiting ${retryAfter}ms before retry`)
@@ -129,7 +129,7 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 					throw error
 				}
 
-				await this.handleRateLimit(error)
+				await this.handleRateLimitError(error)
 				const backoffDelay = this.exponentialBackoff(retryCount)
 				this.logDebug(`Retrying operation after ${backoffDelay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`)
 				await new Promise((resolve) => setTimeout(resolve, backoffDelay))
@@ -157,7 +157,9 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 
 		this.logDebug("Mistral API error:", errorForLogging)
 
-		if (error instanceof Error) {
+		if (error instanceof Error && error.message.includes("rate limit")) {
+			this.handleRateLimitError(error)
+		} else if (error instanceof Error) {
 			throw new Error(`Mistral API error: ${error.message}`)
 		}
 		throw new Error(`Mistral API error: ${String(error)}`)

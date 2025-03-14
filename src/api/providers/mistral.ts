@@ -31,6 +31,12 @@ interface ImageURLContent {
 
 type MistralContent = string | (TextContent | ImageURLContent)[]
 
+interface MistralUsage {
+	prompt_tokens: number
+	completion_tokens: number
+	total_tokens: number
+}
+
 export class MistralHandler extends BaseProvider implements SingleCompletionHandler {
 	protected options: ApiHandlerOptions
 	private client: Mistral
@@ -268,7 +274,6 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 			const streamParams = {
 				model: model.id,
 				messages: [{ role: "system" as const, content: systemPrompt }, ...convertToMistralMessages(messages)],
-				maxTokens: this.options.includeMaxTokens ? safeMaxTokens : undefined,
 				temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
 				stream: this.options.mistralModelStreamingEnabled,
 				signal, // Add abort signal
@@ -285,6 +290,7 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 
 			this.logDebug("Stream connection established")
 			let hasYieldedUsage = false
+			let accumulatedText = "" // Variable to accumulate response text
 
 			try {
 				for await (const chunk of response) {
@@ -294,46 +300,66 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 						return
 					}
 
-					// Check finish reason first
-					if (chunk.data?.choices[0]?.finishReason) {
-						this.logDebug(`Stream finished with reason: ${chunk.data.choices[0].finishReason}`)
-						break
-					}
+					// Log the structure of the chunk to debug
+					this.logDebug(`Chunk keys: ${Object.keys(chunk || {}).join(", ")}`)
 
-					if (!chunk.data) {
-						this.logDebug("Received empty chunk")
-						continue
-					}
+					// Handle usage metrics if present at the top level
+					if (!hasYieldedUsage && chunk && "usage" in chunk && chunk.usage) {
+						// Type assertion to access the properties safely
+						const usage = chunk.usage as MistralUsage
 
-					const delta = chunk.data.choices[0]?.delta
-					if (delta?.content) {
-						const textContent = this.extractText(delta.content as MistralContent)
-						this.logDebug(
-							`Received content: "${textContent.substring(0, 50)}${textContent.length > 50 ? "..." : ""}"`,
-						)
-						yield { type: "text", text: textContent }
-					}
-
-					// Handle usage metrics if present
-					if (chunk.data.usage && !hasYieldedUsage) {
 						hasYieldedUsage = true
 						this.logDebug(
-							`Usage - Input tokens: ${chunk.data.usage.promptTokens}, Output tokens: ${chunk.data.usage.completionTokens}`,
+							`Usage - Input tokens: ${usage.prompt_tokens}, Output tokens: ${usage.completion_tokens}`,
 						)
+
 						yield {
 							type: "usage",
-							inputTokens: chunk.data.usage.promptTokens || 0,
-							outputTokens: chunk.data.usage.completionTokens || 0,
+							inputTokens: usage.prompt_tokens || 0,
+							outputTokens: usage.completion_tokens || 0,
+						}
+					}
+
+					// Continue with the existing delta content handling
+					if (chunk.data) {
+						// Check finish reason first
+						if (chunk.data?.choices[0]?.finishReason) {
+							this.logDebug(`Stream finished with reason: ${chunk.data.choices[0].finishReason}`)
+							break
+						}
+
+						const delta = chunk.data.choices[0]?.delta
+						if (delta?.content) {
+							const textContent = this.extractText(delta.content as MistralContent)
+							this.logDebug(
+								`Received content: "${textContent.substring(0, 50)}${textContent.length > 50 ? "..." : ""}"`,
+							)
+							accumulatedText += textContent // Accumulate the text
+							yield { type: "text", text: textContent }
 						}
 					}
 				}
 
+				// After the streaming loop completes
 				// Yield final usage if not done yet
 				if (!hasYieldedUsage && !signal.aborted) {
+					// Log that we're using fallback token counting
+					this.logDebug("No usage information received from Mistral API, using fallback estimation")
+
+					// Use our estimated input tokens and the accumulated text for output tokens
+					const outputTextLength = accumulatedText.length
+
+					// Estimate output tokens (roughly 4 chars per token)
+					const estimatedOutputTokens = Math.ceil(outputTextLength / 4)
+
+					this.logDebug(
+						`Using fallback estimation - Input: ${estimatedInputTokens}, Output: ${estimatedOutputTokens}`,
+					)
+
 					yield {
 						type: "usage",
-						inputTokens: 0,
-						outputTokens: 0,
+						inputTokens: estimatedInputTokens,
+						outputTokens: estimatedOutputTokens,
 					}
 				}
 

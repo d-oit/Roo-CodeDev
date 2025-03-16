@@ -6,6 +6,74 @@ import { convertToMistralMessages } from "../transform/mistral-format"
 import { ApiStreamChunk } from "../transform/stream"
 import { BaseProvider } from "./base-provider"
 import * as vscode from "vscode"
+import { logger } from "../../utils/logging"
+
+// Create a custom debug logger that integrates with our existing logging system
+const createDebugLogger = (outputChannel?: vscode.OutputChannel, enableDebug?: boolean) => ({
+	debug: (...args: any[]) => {
+		if (enableDebug && outputChannel) {
+			const message = args
+				.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : String(arg)))
+				.join(" ")
+			outputChannel.appendLine(`[Roo Code Debug] ${message}`)
+		}
+	},
+	info: (...args: any[]) => {
+		if (enableDebug && outputChannel) {
+			const message = args
+				.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : String(arg)))
+				.join(" ")
+			outputChannel.appendLine(`[Roo Code Info] ${message}`)
+		}
+	},
+	warn: (...args: any[]) => {
+		if (enableDebug && outputChannel) {
+			const message = args
+				.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : String(arg)))
+				.join(" ")
+			outputChannel.appendLine(`[Roo Code Warning] ${message}`)
+		}
+	},
+	error: (...args: any[]) => {
+		if (outputChannel) {
+			const message = args
+				.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : String(arg)))
+				.join(" ")
+			outputChannel.appendLine(`[Roo Code Error] ${message}`)
+		}
+	},
+	// Add missing methods required by Mistral SDK Logger interface
+	log: (...args: any[]) => {
+		if (enableDebug && outputChannel) {
+			const message = args
+				.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : String(arg)))
+				.join(" ")
+			outputChannel.appendLine(`[Roo Code Log] ${message}`)
+		}
+	},
+	group: (...args: any[]) => {
+		if (enableDebug && outputChannel) {
+			const message = args
+				.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : String(arg)))
+				.join(" ")
+			outputChannel.appendLine(`[Roo Code Group] ${message}`)
+		}
+	},
+	groupEnd: () => {
+		if (enableDebug && outputChannel) {
+			outputChannel.appendLine(`[Roo Code GroupEnd]`)
+		}
+	},
+	logts: (...args: any[]) => {
+		if (enableDebug && outputChannel) {
+			const timestamp = new Date().toISOString()
+			const message = args
+				.map((arg) => (typeof arg === "object" ? JSON.stringify(arg, null, 2) : String(arg)))
+				.join(" ")
+			outputChannel.appendLine(`[Roo Code ${timestamp}] ${message}`)
+		}
+	},
+})
 
 const MISTRAL_DEFAULT_TEMPERATURE = 0
 const MAX_RETRIES = 3 // Maximum number of retries for failed requests
@@ -42,9 +110,14 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 	private client: Mistral
 	private readonly enableDebugOutput: boolean
 	private readonly outputChannel?: vscode.OutputChannel
+	private readonly enableVerboseDebug: boolean
+	private readonly verboseOutputChannel?: vscode.OutputChannel
+	private readonly enableSdkDebug: boolean
 	private cachedModel: { id: MistralModelId; info: ModelInfo; forModelId: string | undefined } | null = null
 	private static readonly outputChannelName = "Roo Code Mistral"
+	private static readonly verboseOutputChannelName = "Roo Code Mistral Verbose"
 	private static sharedOutputChannel: vscode.OutputChannel | undefined
+	private static sharedVerboseOutputChannel: vscode.OutputChannel | undefined
 	private noContentInterval?: NodeJS.Timeout
 	private lastYieldedContent: string = ""
 	private loopDetectionCount: number = 0
@@ -69,8 +142,12 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		try {
 			const config = vscode.workspace.getConfiguration("roo-cline")
 			this.enableDebugOutput = config?.get<boolean>("debug.mistral") || false
+			this.enableVerboseDebug = config?.get<boolean>("debug.mistralVerbose") || false
+			this.enableSdkDebug = config?.get<boolean>("debug.mistralSdk") || false
 		} catch {
 			this.enableDebugOutput = false
+			this.enableVerboseDebug = false
+			this.enableSdkDebug = false
 		}
 
 		if (this.enableDebugOutput) {
@@ -86,13 +163,33 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 			}
 		}
 
+		if (this.enableVerboseDebug) {
+			try {
+				if (!MistralHandler.sharedVerboseOutputChannel) {
+					MistralHandler.sharedVerboseOutputChannel = vscode.window.createOutputChannel(
+						MistralHandler.verboseOutputChannelName,
+					)
+				}
+				this.verboseOutputChannel = MistralHandler.sharedVerboseOutputChannel
+			} catch {
+				// Ignore output channel creation errors in tests
+			}
+		}
+
 		const baseUrl = this.getBaseUrl()
 		this.logDebug(`MistralHandler using baseUrl: ${baseUrl}`)
 
-		// Initialize with API key and base URL
+		// Create custom debug logger that integrates with our logging system
+		// Only use debug logger if SDK debug is enabled
+		const debugLogger = this.enableSdkDebug
+			? createDebugLogger(this.enableVerboseDebug ? this.verboseOutputChannel : this.outputChannel, true)
+			: undefined
+
+		// Initialize with API key, base URL and debug logger
 		this.client = new Mistral({
 			apiKey: this.options.mistralApiKey,
 			serverURL: baseUrl,
+			debugLogger: debugLogger,
 		})
 	}
 
@@ -102,6 +199,15 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 				.map((msg) => (typeof msg === "object" ? JSON.stringify(msg, null, 2) : msg))
 				.join(" ")
 			this.outputChannel.appendLine(`[Roo Code] ${formattedMessages}`)
+		}
+	}
+
+	private logVerbose(...messages: (string | object)[]): void {
+		if (this.enableVerboseDebug && this.verboseOutputChannel) {
+			const formattedMessages = messages
+				.map((msg) => (typeof msg === "object" ? JSON.stringify(msg, null, 2) : msg))
+				.join(" ")
+			this.verboseOutputChannel.appendLine(`[Roo Code] ${new Date().toISOString()} ${formattedMessages}`)
 		}
 	}
 
@@ -124,11 +230,17 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 	}
 
 	private async handleRateLimitError(error: Error): Promise<void> {
-		if (error.message.includes("rate limit")) {
-			const retryAfter = 60000 // Default to 1 minute if no specific time provided
-			this.logDebug(`Rate limit hit. Waiting ${retryAfter}ms before retry`)
-			await new Promise((resolve) => setTimeout(resolve, retryAfter))
-		}
+		const retryAfterMatch = error.message.match(/retry after (\d+)/i)
+		const retryAfter = retryAfterMatch ? parseInt(retryAfterMatch[1], 10) * 1000 : 60000 // Convert to ms or default to 1 minute
+
+		logger.warn("Mistral rate limit hit", {
+			ctx: "mistral",
+			retryAfterMs: retryAfter,
+			errorMessage: error.message,
+		})
+
+		this.logDebug(`Rate limit hit. Waiting ${retryAfter}ms before retry`)
+		await new Promise((resolve) => setTimeout(resolve, retryAfter))
 	}
 
 	private async retryWithBackoff<T>(operation: () => Promise<T>): Promise<T> {
@@ -139,13 +251,34 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 				return await operation()
 			} catch (error) {
 				if (retryCount >= MAX_RETRIES || !(error instanceof Error)) {
+					this.logVerbose(`Max retries (${MAX_RETRIES}) reached or non-Error thrown:`, error)
+					logger.error("Mistral retry failed", {
+						ctx: "mistral",
+						retryCount,
+						error: error instanceof Error ? error.message : String(error),
+					})
 					throw error
 				}
 
-				await this.handleRateLimitError(error)
-				const backoffDelay = this.exponentialBackoff(retryCount)
-				this.logDebug(`Retrying operation after ${backoffDelay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`)
-				await new Promise((resolve) => setTimeout(resolve, backoffDelay))
+				const isRateLimit = error instanceof Error && error.message.includes("rate limit")
+
+				if (isRateLimit) {
+					await this.handleRateLimitError(error)
+				} else {
+					const backoffDelay = this.exponentialBackoff(retryCount)
+					this.logDebug(
+						`Retrying operation after ${backoffDelay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`,
+					)
+					this.logVerbose(`Retry reason:`, error)
+					logger.warn("Mistral API retry", {
+						ctx: "mistral",
+						retryCount: retryCount + 1,
+						backoffDelay,
+						error: error instanceof Error ? error.message : String(error),
+					})
+					await new Promise((resolve) => setTimeout(resolve, backoffDelay))
+				}
+
 				retryCount++
 			}
 		}
@@ -170,11 +303,29 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 
 		this.logDebug("Mistral API error:", errorForLogging)
 
-		if (error instanceof Error && error.message.includes("rate limit")) {
-			this.handleRateLimitError(error)
-		} else if (error instanceof Error) {
-			throw new Error(`Mistral API error: ${error.message}`)
+		if (error instanceof Error) {
+			// Check for specific Mistral API error types
+			if (error.message.includes("rate limit")) {
+				this.handleRateLimitError(error)
+			} else if (error.message.includes("authentication")) {
+				logger.error("Mistral authentication error", { ctx: "mistral", error: errorForLogging })
+				throw new Error(`Mistral API authentication error: ${error.message}`)
+			} else if (error.message.includes("invalid model")) {
+				logger.error("Mistral invalid model error", { ctx: "mistral", error: errorForLogging })
+				throw new Error(`Mistral API model error: ${error.message}`)
+			} else if (error.message.includes("context length")) {
+				logger.error("Mistral context length error", { ctx: "mistral", error: errorForLogging })
+				throw new Error(`Mistral API context length error: ${error.message}`)
+			} else if (error.message.includes("timeout")) {
+				logger.error("Mistral timeout error", { ctx: "mistral", error: errorForLogging })
+				throw new Error(`Mistral API timeout: ${error.message}`)
+			} else {
+				logger.error("Mistral general error", { ctx: "mistral", error: errorForLogging })
+				throw new Error(`Mistral API error: ${error.message}`)
+			}
 		}
+
+		logger.error("Mistral unknown error", { ctx: "mistral", error: String(error) })
 		throw new Error(`Mistral API error: ${String(error)}`)
 	}
 
@@ -500,6 +651,32 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 				throw new Error(`Mistral completion error: ${error.message}`)
 			}
 			throw error
+		}
+	}
+
+	/**
+	 * Handle rate limit errors by extracting details from the HTTP header and notifying the user.
+	 *
+	 * @param response The HTTP response object
+	 */
+	protected async handleRateLimit(response: Response): Promise<void> {
+		const rateLimitRemaining = response.headers.get("x-rate-limit-remaining")
+		const rateLimitReset = response.headers.get("x-rate-limit-reset")
+
+		if (rateLimitRemaining !== null && rateLimitReset !== null) {
+			const remaining = parseInt(rateLimitRemaining, 10)
+			const resetTime = new Date(parseInt(rateLimitReset, 10) * 1000)
+
+			if (remaining <= 0) {
+				const message = `Rate limit exceeded. Retry after ${resetTime.toLocaleString()}`
+				vscode.window.showErrorMessage(message)
+			} else {
+				const message = `Rate limit almost reached. ${remaining} requests remaining.`
+				vscode.window.showWarningMessage(message)
+			}
+		} else {
+			const message = "Rate limit details not found in the response headers."
+			vscode.window.showErrorMessage(message)
 		}
 	}
 

@@ -234,6 +234,18 @@
 						"default": false,
 						"markdownDescription": "Enable debug logging for Mistral API interactions. Logs will appear in the 'Roo Code Mistral' output channel.",
 						"scope": "window"
+					},
+					"roo-cline.debug.mistralVerbose": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Enable verbose debug logging for Mistral API interactions, including request/response details. Logs will appear in the 'Roo Code Mistral Verbose' output channel.",
+						"scope": "window"
+					},
+					"roo-cline.debug.mistralSdk": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Enable debug logging for Mistral SDK internal operations. Logs will appear in the output channel.",
+						"scope": "window"
 					}
 				}
 			}

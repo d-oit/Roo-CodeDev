@@ -99,6 +99,14 @@ interface ImageURLContent {
 
 type MistralContent = string | (TextContent | ImageURLContent)[]
 
+interface MistralErrorResponse {
+	error: {
+		message: string
+		type: string
+		code: number
+	}
+}
+
 interface MistralUsage {
 	prompt_tokens: number
 	completion_tokens: number
@@ -118,14 +126,6 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 	private static readonly verboseOutputChannelName = "Roo Code Mistral Verbose"
 	private static sharedOutputChannel: vscode.OutputChannel | undefined
 	private static sharedVerboseOutputChannel: vscode.OutputChannel | undefined
-	private noContentInterval?: NodeJS.Timeout
-	private lastYieldedContent: string = ""
-	private loopDetectionCount: number = 0
-	private MAX_LOOP_ITERATIONS: number = 5
-	private patternDetectionBuffer: string = "" // Add this to track patterns
-	private repetitivePatternBuffer = ""
-	private repetitivePatternThreshold = 3 // How many repetitions before we consider it a problem
-	private maxPatternLength = 20 // Maximum pattern length to check
 
 	constructor(options: ApiHandlerOptions) {
 		super()
@@ -180,16 +180,14 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		this.logDebug(`MistralHandler using baseUrl: ${baseUrl}`)
 
 		// Create custom debug logger that integrates with our logging system
-		// Only use debug logger if SDK debug is enabled
 		const debugLogger = this.enableSdkDebug
 			? createDebugLogger(this.enableVerboseDebug ? this.verboseOutputChannel : this.outputChannel, true)
 			: undefined
 
-		// Initialize with API key, base URL and debug logger
+		// Initialize the Mistral client
 		this.client = new Mistral({
 			apiKey: this.options.mistralApiKey,
-			serverURL: baseUrl,
-			debugLogger: debugLogger,
+			debugLogger,
 		})
 	}
 
@@ -248,15 +246,22 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 
 		while (true) {
 			try {
-				return await operation()
+				const result = await operation()
+
+				// Check if result is a Response object and has status code
+				if (result && typeof result === "object" && "status" in result && result.status === 429) {
+					// Handle rate limit response
+					await this.handleRateLimit(result as unknown as Response)
+					const backoffDelay = this.exponentialBackoff(retryCount)
+					await new Promise((resolve) => setTimeout(resolve, backoffDelay))
+					retryCount++
+					continue
+				}
+
+				return result
 			} catch (error) {
-				if (retryCount >= MAX_RETRIES || !(error instanceof Error)) {
-					this.logVerbose(`Max retries (${MAX_RETRIES}) reached or non-Error thrown:`, error)
-					logger.error("Mistral retry failed", {
-						ctx: "mistral",
-						retryCount,
-						error: error instanceof Error ? error.message : String(error),
-					})
+				if (retryCount >= MAX_RETRIES) {
+					this.logDebug(`Maximum retry count (${MAX_RETRIES}) reached, giving up`)
 					throw error
 				}
 
@@ -287,10 +292,6 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 	private abortController?: AbortController
 
 	private cleanup(): void {
-		if (this.noContentInterval) {
-			clearInterval(this.noContentInterval)
-			this.noContentInterval = undefined
-		}
 		if (this.abortController) {
 			this.abortController.abort()
 			this.abortController = undefined
@@ -381,12 +382,9 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		try {
 			this.logDebug(`Creating message with system prompt: ${systemPrompt}`)
 
-			// Create new abort controller
-			this.cleanup() // Clean up any existing controller
+			this.cleanup() // Clean up any existing state
 			this.abortController = new AbortController()
 			const signal = this.abortController.signal
-
-			// Get the model first
 			const model = this.getModel()
 
 			// Calculate a reasonable maxTokens value based on context window and input size
@@ -450,8 +448,6 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 			this.logDebug("Stream connection established")
 			let hasYieldedUsage = false
 			let accumulatedText = "" // Variable to accumulate response text
-			const startTime = Date.now()
-			const MAX_STREAM_DURATION_MS = 60000 // 1 minute max
 
 			try {
 				for await (const chunk of response) {
@@ -461,14 +457,14 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 						return
 					}
 
-					// Enhanced debugging - log the entire chunk structure
-					this.logDebug(`Chunk received: ${JSON.stringify(chunk, null, 2)}`)
-					this.logDebug(`Chunk keys: ${Object.keys(chunk || {}).join(", ")}`)
+					// Log chunk details in verbose mode
+					if (this.enableVerboseDebug) {
+						this.logVerbose(`Chunk received: ${JSON.stringify(chunk, null, 2)}`)
+					}
 
-					// If chunk has data property, log its structure too
-					if (chunk.data) {
-						this.logDebug(`Chunk.data keys: ${Object.keys(chunk.data || {}).join(", ")}`)
-						this.logDebug(`Chunk.data structure: ${JSON.stringify(chunk.data, null, 2)}`)
+					// Only log finish reason for debugging
+					if (chunk.data?.choices[0]?.finishReason) {
+						this.logDebug(`Noted finish reason: ${chunk.data.choices[0].finishReason}`)
 					}
 
 					// Handle usage metrics if present at the top level
@@ -490,11 +486,11 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 
 					// Continue with the existing delta content handling
 					if (chunk.data) {
-						// Check for usage information in chunk.data
+						// Handle any remaining usage data if not handled at top level
 						if (!hasYieldedUsage && chunk.data.usage) {
 							hasYieldedUsage = true
 							this.logDebug(
-								`Usage found - Input tokens: ${chunk.data.usage.promptTokens}, Output tokens: ${chunk.data.usage.completionTokens}`,
+								`Usage found in chunk.data - Input tokens: ${chunk.data.usage.promptTokens}, Output tokens: ${chunk.data.usage.completionTokens}`,
 							)
 
 							yield {
@@ -504,120 +500,51 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 							}
 						}
 
-						// Check finish reason first
-						if (chunk.data?.choices[0]?.finishReason) {
-							this.logDebug(`Stream finished with reason: ${chunk.data.choices[0].finishReason}`)
-							break
+						const delta = chunk.data.choices[0]?.delta
+						// Skip initial chunk with just role
+						if (delta?.role === "assistant" && delta.content === "") {
+							this.logDebug("Skipping initial role chunk")
+							continue
 						}
 
-						const delta = chunk.data.choices[0]?.delta
 						if (delta?.content) {
 							const textContent = this.extractText(delta.content as MistralContent)
 
-							// Check if we've been streaming too long
-							if (Date.now() - startTime > MAX_STREAM_DURATION_MS) {
-								this.logDebug(
-									`Stream exceeded maximum duration of ${MAX_STREAM_DURATION_MS}ms, breaking`,
-								)
-								break
-							}
+							// Log content for debugging
+							this.logDebug(`Received content: "${textContent}"`)
 
-							// Add to our pattern detection buffer
-							this.repetitivePatternBuffer += textContent
-
-							// Keep buffer at a reasonable size
-							if (this.repetitivePatternBuffer.length > 500) {
-								this.repetitivePatternBuffer = this.repetitivePatternBuffer.slice(-500)
-							}
-
-							// Check for repetitive patterns
-							const isRepetitive = false // not working this.detectRepetitivePattern(this.repetitivePatternBuffer)
-							if (isRepetitive) {
-								this.loopDetectionCount += 2
-								this.logDebug(`Detected repetitive pattern, count: ${this.loopDetectionCount}`)
-
-								if (this.loopDetectionCount > this.MAX_LOOP_ITERATIONS / 2) {
-									this.logDebug(`Breaking due to excessive repetitive patterns`)
-									break
-								}
-							} else {
-								// Reset counter if no repetition detected
-								this.loopDetectionCount = Math.max(0, this.loopDetectionCount - 1)
-							}
-
-							// Check if this is a repetition of the last content
-							if (textContent === this.lastYieldedContent) {
-								this.logDebug(`Skipping repeated content: "${textContent}"`)
-								this.loopDetectionCount++
-								if (this.loopDetectionCount > this.MAX_LOOP_ITERATIONS) {
-									this.logDebug(
-										`Detected infinite loop after ${this.loopDetectionCount} iterations, breaking`,
-									)
-									break
-								}
-								continue
-							}
-
-							// Reset loop counter if content is different
-							this.loopDetectionCount = 0
-
-							// Add more robust pattern detection
-							this.patternDetectionBuffer += textContent
-							if (this.patternDetectionBuffer.length > 100) {
-								// Check for repeating patterns in last 100 chars
-								const lastChunk = this.patternDetectionBuffer.slice(-100)
-								for (let i = 1; i <= 20; i++) {
-									// Check patterns up to 20 chars
-									const pattern = lastChunk.slice(-i)
-									if (pattern && lastChunk.slice(-2 * i, -i) === pattern && pattern.length > 2) {
-										this.logDebug(`Detected repeating pattern: "${pattern}"`)
-										this.loopDetectionCount += 2
-										if (this.loopDetectionCount > this.MAX_LOOP_ITERATIONS) {
-											this.logDebug(`Breaking due to repeating pattern detection`)
-											break
-										}
-									}
-								}
-								// Trim buffer to prevent memory issues
-								this.patternDetectionBuffer = this.patternDetectionBuffer.slice(-200)
-							}
-
-							this.logDebug(
-								`Received content: "${textContent.substring(0, 50)}${textContent.length > 50 ? "..." : ""}"`,
-							)
-
-							this.lastYieldedContent = textContent
-							accumulatedText += textContent // Accumulate the text
+							// Simply yield the content
 							yield { type: "text", text: textContent }
+							accumulatedText += textContent
 						}
 					}
 				}
 
 				// After the streaming loop completes
-				// Yield final usage if not done yet
-				if (!hasYieldedUsage && !signal.aborted) {
-					// Log that we're using fallback token counting
-					this.logDebug("No usage information received from Mistral API, using fallback estimation")
+				try {
+					// Yield final usage if not done yet
+					if (!hasYieldedUsage && !signal.aborted) {
+						this.logDebug("No usage information received from Mistral API, using fallback estimation")
 
-					// Use our estimated input tokens and the accumulated text for output tokens
-					const outputTextLength = accumulatedText.length
+						// Calculate final usage based on accumulated text
+						const outputTextLength = accumulatedText.length
+						const estimatedOutputTokens = Math.ceil(outputTextLength / 4)
 
-					// Estimate output tokens (roughly 4 chars per token)
-					const estimatedOutputTokens = Math.ceil(outputTextLength / 4)
+						this.logDebug(
+							`Using fallback estimation - Input: ${estimatedInputTokens}, Output: ${estimatedOutputTokens}`,
+						)
 
-					this.logDebug(
-						`Using fallback estimation - Input: ${estimatedInputTokens}, Output: ${estimatedOutputTokens}`,
-					)
-
-					yield {
-						type: "usage",
-						inputTokens: estimatedInputTokens,
-						outputTokens: estimatedOutputTokens,
+						yield {
+							type: "usage",
+							inputTokens: estimatedInputTokens,
+							outputTokens: estimatedOutputTokens,
+						}
 					}
+				} finally {
+					// Ensure cleanup happens even if yielding usage fails
+					this.cleanup()
+					this.logDebug("Stream completed successfully")
 				}
-
-				this.cleanup()
-				this.logDebug("Stream completed successfully")
 			} catch (error) {
 				this.cleanup()
 				if (signal.aborted) {
@@ -655,86 +582,40 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 	}
 
 	/**
-	 * Handle rate limit errors by extracting details from the HTTP header and notifying the user.
+	 * Handle rate limit errors by extracting details from the HTTP response and notifying the user.
 	 *
 	 * @param response The HTTP response object
 	 */
 	protected async handleRateLimit(response: Response): Promise<void> {
-		const rateLimitRemaining = response.headers.get("x-rate-limit-remaining")
-		const rateLimitReset = response.headers.get("x-rate-limit-reset")
+		try {
+			const rateLimitRemaining = response.headers.get("x-ratelimit-remaining")
+			const rateLimitReset = response.headers.get("x-ratelimit-reset")
+			const retryAfter = response.headers.get("retry-after")
 
-		if (rateLimitRemaining !== null && rateLimitReset !== null) {
-			const remaining = parseInt(rateLimitRemaining, 10)
-			const resetTime = new Date(parseInt(rateLimitReset, 10) * 1000)
+			// Try to get error message from response body
+			const message = await response
+				.clone()
+				.json()
+				.then((data) => (data as MistralErrorResponse).error?.message || "Rate limit exceeded")
+				.catch(() => "Rate limit exceeded")
 
-			if (remaining <= 0) {
-				const message = `Rate limit exceeded. Retry after ${resetTime.toLocaleString()}`
-				vscode.window.showErrorMessage(message)
+			if (rateLimitRemaining !== null && rateLimitReset !== null) {
+				const remaining = parseInt(rateLimitRemaining, 10)
+				const resetTime = new Date(parseInt(rateLimitReset, 10) * 1000)
+
+				if (remaining <= 0) {
+					const waitTime = retryAfter ? `${retryAfter} seconds` : resetTime.toLocaleString()
+					vscode.window.showErrorMessage(`${message}. Retry after ${waitTime}`)
+				} else {
+					vscode.window.showWarningMessage(`${message}. ${remaining} requests remaining.`)
+				}
+			} else if (retryAfter) {
+				vscode.window.showErrorMessage(`${message}. Retry after ${retryAfter} seconds.`)
 			} else {
-				const message = `Rate limit almost reached. ${remaining} requests remaining.`
-				vscode.window.showWarningMessage(message)
+				vscode.window.showErrorMessage(message)
 			}
-		} else {
-			const message = "Rate limit details not found in the response headers."
-			vscode.window.showErrorMessage(message)
+		} catch (error) {
+			vscode.window.showErrorMessage("Rate limit exceeded")
 		}
-	}
-
-	/**
-	 * Detects repetitive patterns in the given text
-	 * @param text The text to check for repetitive patterns
-	 * @returns True if a repetitive pattern is detected
-	 */
-	private detectRepetitivePattern(text: string): boolean {
-		// Don't bother checking if text is too short
-		if (text.length < 10) return false
-
-		// Check for exact repetitions of varying lengths
-		for (let patternLength = 2; patternLength <= this.maxPatternLength; patternLength++) {
-			// Get the most recent pattern of this length
-			const pattern = text.slice(-patternLength)
-
-			// Count how many times this pattern appears consecutively
-			let repetitionCount = 0
-			let position = text.length - patternLength
-
-			while (position >= 0) {
-				const segment = text.slice(position, position + patternLength)
-				if (segment === pattern) {
-					repetitionCount++
-					position -= patternLength
-				} else {
-					break
-				}
-			}
-
-			// If we found enough repetitions, report it
-			if (repetitionCount >= this.repetitivePatternThreshold) {
-				this.logDebug(`Detected pattern "${pattern}" repeated ${repetitionCount} times`)
-				return true
-			}
-		}
-
-		// Check for line-based repetitions (common in code/file listings)
-		const lines = text.split("\n").filter((line) => line.trim().length > 0)
-		if (lines.length >= this.repetitivePatternThreshold) {
-			const lastLine = lines[lines.length - 1]
-			let lineRepetitions = 1
-
-			for (let i = lines.length - 2; i >= 0; i--) {
-				if (lines[i] === lastLine) {
-					lineRepetitions++
-				} else {
-					break
-				}
-			}
-
-			if (lineRepetitions >= this.repetitivePatternThreshold) {
-				this.logDebug(`Detected line "${lastLine}" repeated ${lineRepetitions} times`)
-				return true
-			}
-		}
-
-		return false
 	}
 }

@@ -3473,7 +3473,6 @@ export class Cline {
 		let details = ""
 
 		// It could be useful for cline to know if the user went from one or no file to another between messages, so we always include this context
-		details += "\n\n# VSCode Visible Files"
 		const visibleFilePaths = vscode.window.visibleTextEditors
 			?.map((editor) => editor.document?.uri?.fsPath)
 			.filter(Boolean)
@@ -3485,12 +3484,10 @@ export class Cline {
 			: visibleFilePaths.map((p) => p.toPosix()).join("\n")
 
 		if (allowedVisibleFiles) {
+			details += "\n\n# VSCode Visible Files"
 			details += `\n${allowedVisibleFiles}`
-		} else {
-			details += "\n(No visible files)"
 		}
 
-		details += "\n\n# VSCode Open Tabs"
 		const { maxOpenTabsContext } = (await this.providerRef.deref()?.getState()) ?? {}
 		const maxTabs = maxOpenTabsContext ?? 20
 		const openTabPaths = vscode.window.tabGroups.all
@@ -3506,9 +3503,8 @@ export class Cline {
 			: openTabPaths.map((p) => p.toPosix()).join("\n")
 
 		if (allowedOpenTabs) {
+			details += "\n\n# VSCode Open Tabs"
 			details += `\n${allowedOpenTabs}`
-		} else {
-			details += "\n(No open tabs)"
 		}
 
 		const busyTerminals = this.terminalManager.getTerminals(true)

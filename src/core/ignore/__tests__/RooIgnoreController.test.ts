@@ -500,4 +500,24 @@ describe("RooIgnoreController", () => {
 			expect(controller.validateAccess("node_modules/package.json")).toBe(true)
 		})
 	})
+
+	describe("Integration with Cline", () => {
+		it("should correctly filter visible files in getEnvironmentDetails", async () => {
+			// Setup .rooignore content
+			mockFileExists.mockResolvedValue(true)
+			mockReadFile.mockResolvedValue("secrets/**\n*.log")
+			await controller.initialize()
+
+			// Mock visible files that would come from VSCode
+			const visibleFiles = ["src/app.ts", "secrets/keys.json", "logs/error.log", "README.md"]
+
+			// Test the filtering logic similar to what's in Cline.getEnvironmentDetails
+			const filteredFiles = controller.filterPaths(visibleFiles)
+
+			// Verify only allowed files remain
+			expect(filteredFiles).toEqual(["src/app.ts", "README.md"])
+			expect(filteredFiles).not.toContain("secrets/keys.json")
+			expect(filteredFiles).not.toContain("logs/error.log")
+		})
+	})
 })

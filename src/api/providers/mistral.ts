@@ -423,19 +423,30 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 						this.logVerbose(`Chunk received: ${JSON.stringify(chunk, null, 2)}`)
 					}
 
-					// Handle content chunks
-					if (chunk.data.choices?.[0]?.delta?.content) {
+					// Handle content chunks and completion signals
+					if (chunk.data.choices?.[0]?.delta) {
 						const delta = chunk.data.choices[0].delta
-						let content: string = ""
-						if (typeof delta.content === "string") {
-							content = delta.content
-						} else if (Array.isArray(delta.content)) {
-							content = delta.content.map((c) => (c.type === "text" ? c.text : "")).join("")
+
+						// Check for finish reason (completion signal)
+						if (chunk.data.choices[0].finishReason === "stop") {
+							this.logDebug("Received completion signal with finishReason: stop")
+							// No need to yield anything for the completion signal
+							continue
 						}
 
-						if (content) {
-							this.logDebug(`Received content: "${content}"`)
-							yield { type: "text", text: content }
+						// Process content if it exists
+						if (delta.content !== undefined) {
+							let content: string = ""
+							if (typeof delta.content === "string") {
+								content = delta.content
+							} else if (Array.isArray(delta.content)) {
+								content = delta.content.map((c) => (c.type === "text" ? c.text : "")).join("")
+							}
+
+							if (content) {
+								this.logDebug(`Received content: "${content}"`)
+								yield { type: "text", text: content }
+							}
 						}
 					}
 

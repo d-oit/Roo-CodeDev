@@ -76,7 +76,7 @@ const createDebugLogger = (outputChannel?: vscode.OutputChannel, enableDebug?: b
 })
 
 const MISTRAL_DEFAULT_TEMPERATURE = 0
-const MAX_RETRIES = 3 // Maximum number of retries for failed requests
+const MAX_RETRIES = 3 // Maximum number of retries for failed requests - const until a ui setting
 const INITIAL_RETRY_DELAY = 1000 // Initial retry delay in milliseconds
 const MAX_RETRY_DELAY = 32000 // Maximum retry delay in milliseconds
 const JITTER_FACTOR = 0.2 // Jitter factor for randomization (20%)

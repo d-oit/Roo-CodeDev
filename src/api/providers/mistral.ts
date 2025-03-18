@@ -1,5 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { Mistral } from "@mistralai/mistralai"
+import { ChatCompletionStreamRequest } from "@mistralai/mistralai/models/components"
 import { SingleCompletionHandler } from "../"
 import { ApiHandlerOptions, mistralDefaultModelId, MistralModelId, mistralModels, ModelInfo } from "../../shared/api"
 import { convertToMistralMessages } from "../transform/mistral-format"
@@ -107,12 +108,6 @@ interface MistralErrorResponse {
 	}
 }
 
-interface MistralUsage {
-	prompt_tokens: number
-	completion_tokens: number
-	total_tokens: number
-}
-
 export class MistralHandler extends BaseProvider implements SingleCompletionHandler {
 	protected options: ApiHandlerOptions
 	private client: Mistral
@@ -188,6 +183,7 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		this.client = new Mistral({
 			apiKey: this.options.mistralApiKey,
 			debugLogger,
+			serverURL: baseUrl,
 		})
 	}
 
@@ -382,76 +378,41 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		try {
 			this.logDebug(`Creating message with system prompt: ${systemPrompt}`)
 
-			this.cleanup() // Clean up any existing state
+			// Clean up any existing state
+			this.cleanup()
 			this.abortController = new AbortController()
 			const signal = this.abortController.signal
-			const model = this.getModel()
 
-			// Calculate a reasonable maxTokens value based on context window and input size
-			const inputMessages = [{ role: "system", content: systemPrompt }, ...convertToMistralMessages(messages)]
-
-			// Estimate input tokens using a simple heuristic
-			let estimatedInputTokens = 0
-			try {
-				// Convert messages to a string and use a character-based estimation
-				const messageText = inputMessages
-					.map((msg) => {
-						if (typeof msg.content === "string") {
-							return msg.content
-						} else if (Array.isArray(msg.content)) {
-							return msg.content
-								.map((c) => (typeof c === "string" ? c : c.type === "text" ? c.text : ""))
-								.join("")
-						}
-						return ""
-					})
-					.join(" ")
-
-				// Rough estimate: 1 token ≈ 4 characters for English text
-				estimatedInputTokens = Math.ceil(messageText.length / 4)
-				this.logDebug(`Estimated input tokens (character-based): ${estimatedInputTokens}`)
-			} catch (error) {
-				this.logDebug("Error estimating token count:", error)
-				// Default to a conservative estimate if calculation fails
-				estimatedInputTokens = Math.floor(model.info.contextWindow * 0.5)
-			}
-
-			// Reserve 20% of context window for output by default, or use a configured value
-			const contextWindow = model.info.contextWindow
-			const reservedForOutput = this.options.modelMaxTokens || Math.floor(contextWindow * 0.2)
-
-			// Ensure we don't exceed the model's capabilities
-			const safeMaxTokens = Math.min(
-				reservedForOutput,
-				model.info.maxTokens || reservedForOutput,
-				Math.max(100, contextWindow - estimatedInputTokens), // Ensure at least 100 tokens for output
-			)
-
-			const streamParams = {
-				model: model.id,
-				messages: [{ role: "system" as const, content: systemPrompt }, ...convertToMistralMessages(messages)],
-				temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
-				stream: this.options.mistralModelStreamingEnabled,
-				maxTokens: safeMaxTokens,
-				signal, // Add abort signal
-			}
-
-			this.logDebug("Streaming with params:", streamParams)
-
-			const response = await this.retryWithBackoff(async () => {
+			let hasYieldedUsage = false
+			const stream = await this.retryWithBackoff(async () => {
 				if (signal.aborted) {
 					throw new Error("Stream aborted before start")
 				}
-				return await this.client.chat.stream(streamParams)
+
+				// Set up stream options with required parameters
+				const streamOptions: ChatCompletionStreamRequest = {
+					model: this.getModel().id,
+					messages: [{ role: "system", content: systemPrompt }, ...convertToMistralMessages(messages)] as any, // Type assertion to bypass type checking
+					temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
+					stream: true,
+				}
+
+				// Create stream with abort handling
+				const stream = await this.client.chat.stream(streamOptions)
+
+				// Set up abort handler
+				signal.addEventListener("abort", () => {
+					this.logDebug("Stream aborted by user")
+					this.cleanup()
+				})
+
+				return stream
 			})
 
 			this.logDebug("Stream connection established")
-			let hasYieldedUsage = false
-			let accumulatedText = "" // Variable to accumulate response text
 
 			try {
-				for await (const chunk of response) {
-					// Check for abortion at start of each iteration
+				for await (const chunk of stream) {
 					if (signal.aborted) {
 						this.logDebug("Stream aborted during processing")
 						return
@@ -462,89 +423,38 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 						this.logVerbose(`Chunk received: ${JSON.stringify(chunk, null, 2)}`)
 					}
 
-					// Only log finish reason for debugging
-					if (chunk.data?.choices[0]?.finishReason) {
-						this.logDebug(`Noted finish reason: ${chunk.data.choices[0].finishReason}`)
+					// Handle content chunks
+					if (chunk.data.choices?.[0]?.delta?.content) {
+						const delta = chunk.data.choices[0].delta
+						let content: string = ""
+						if (typeof delta.content === "string") {
+							content = delta.content
+						} else if (Array.isArray(delta.content)) {
+							content = delta.content.map((c) => (c.type === "text" ? c.text : "")).join("")
+						}
+
+						if (content) {
+							this.logDebug(`Received content: "${content}"`)
+							yield { type: "text", text: content }
+						}
 					}
 
-					// Handle usage metrics if present at the top level
-					if (!hasYieldedUsage && chunk && "usage" in chunk && chunk.usage) {
-						// Type assertion to access the properties safely
-						const usage = chunk.usage as MistralUsage
-
+					// Handle usage metrics
+					if (chunk.data.usage && !hasYieldedUsage) {
 						hasYieldedUsage = true
 						this.logDebug(
-							`Usage found - Input tokens: ${usage.prompt_tokens}, Output tokens: ${usage.completion_tokens}`,
+							`Usage metrics - Input tokens: ${chunk.data.usage.promptTokens}, Output tokens: ${chunk.data.usage.completionTokens}`,
 						)
-
 						yield {
 							type: "usage",
-							inputTokens: usage.prompt_tokens || 0,
-							outputTokens: usage.completion_tokens || 0,
-						}
-					}
-
-					// Continue with the existing delta content handling
-					if (chunk.data) {
-						// Handle any remaining usage data if not handled at top level
-						if (!hasYieldedUsage && chunk.data.usage) {
-							hasYieldedUsage = true
-							this.logDebug(
-								`Usage found in chunk.data - Input tokens: ${chunk.data.usage.promptTokens}, Output tokens: ${chunk.data.usage.completionTokens}`,
-							)
-
-							yield {
-								type: "usage",
-								inputTokens: chunk.data.usage.promptTokens || 0,
-								outputTokens: chunk.data.usage.completionTokens || 0,
-							}
-						}
-
-						const delta = chunk.data.choices[0]?.delta
-						// Skip initial chunk with just role
-						if (delta?.role === "assistant" && delta.content === "") {
-							this.logDebug("Skipping initial role chunk")
-							continue
-						}
-
-						if (delta?.content) {
-							const textContent = this.extractText(delta.content as MistralContent)
-
-							// Log content for debugging
-							this.logDebug(`Received content: "${textContent}"`)
-
-							// Simply yield the content
-							yield { type: "text", text: textContent }
-							accumulatedText += textContent
+							inputTokens: chunk.data.usage.promptTokens || 0,
+							outputTokens: chunk.data.usage.completionTokens || 0,
 						}
 					}
 				}
 
-				// After the streaming loop completes
-				try {
-					// Yield final usage if not done yet
-					if (!hasYieldedUsage && !signal.aborted) {
-						this.logDebug("No usage information received from Mistral API, using fallback estimation")
-
-						// Calculate final usage based on accumulated text
-						const outputTextLength = accumulatedText.length
-						const estimatedOutputTokens = Math.ceil(outputTextLength / 4)
-
-						this.logDebug(
-							`Using fallback estimation - Input: ${estimatedInputTokens}, Output: ${estimatedOutputTokens}`,
-						)
-
-						yield {
-							type: "usage",
-							inputTokens: estimatedInputTokens,
-							outputTokens: estimatedOutputTokens,
-						}
-					}
-				} finally {
-					// Ensure cleanup happens even if yielding usage fails
-					this.cleanup()
-					this.logDebug("Stream completed successfully")
-				}
+				this.cleanup()
+				this.logDebug("Stream completed successfully")
 			} catch (error) {
 				this.cleanup()
 				if (signal.aborted) {

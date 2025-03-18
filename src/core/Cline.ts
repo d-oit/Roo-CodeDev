@@ -3472,10 +3472,15 @@ export class Cline {
 	async getEnvironmentDetails(includeFileDetails: boolean = false) {
 		let details = ""
 
+		const { maxOpenTabsContext } = (await this.providerRef.deref()?.getState()) ?? {}
+		const maxTabs = maxOpenTabsContext ?? 20
+
 		// It could be useful for cline to know if the user went from one or no file to another between messages, so we always include this context
 		const visibleFilePaths = vscode.window.visibleTextEditors
 			?.map((editor) => editor.document?.uri?.fsPath)
 			.filter(Boolean)
+			// Filter out temporary response files
+			.filter((path) => !path.includes("response_") && !path.match(/\\response_[a-f0-9-]+\\[0-9]+$/))
 			.map((absolutePath) => path.relative(cwd, absolutePath))
 
 		// Filter paths through rooIgnoreController
@@ -3488,8 +3493,6 @@ export class Cline {
 			details += `\n${allowedVisibleFiles}`
 		}
 
-		const { maxOpenTabsContext } = (await this.providerRef.deref()?.getState()) ?? {}
-		const maxTabs = maxOpenTabsContext ?? 20
 		const openTabPaths = vscode.window.tabGroups.all
 			.flatMap((group) => group.tabs)
 			.map((tab) => (tab.input as vscode.TabInputText)?.uri?.fsPath)

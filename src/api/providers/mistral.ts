@@ -430,7 +430,8 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 						// Check for finish reason (completion signal)
 						if (chunk.data.choices[0].finishReason === "stop") {
 							this.logDebug("Received completion signal with finishReason: stop")
-							// No need to yield anything for the completion signal
+							// Yield an empty text chunk to signal completion
+							yield { type: "text", text: "" }
 							continue
 						}
 

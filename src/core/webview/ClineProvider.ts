@@ -1906,7 +1906,6 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 						await this.updateGlobalState("telemetrySetting", telemetrySetting)
 						const isOptedIn = telemetrySetting === "enabled"
 						telemetryService.updateTelemetryState(isOptedIn)
-						await this.postStateToWebview()
 						break
 					}
 				}

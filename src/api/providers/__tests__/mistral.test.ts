@@ -189,7 +189,7 @@ describe("MistralHandler", () => {
 			}
 			handler = new MistralHandler(mockOptions)
 
-			// Create a successful response function instead of storing the mock implementation
+			// Create a successful response function
 			const createSuccessResponse = async () => {
 				const response = {
 					headers: {},
@@ -222,9 +222,9 @@ describe("MistralHandler", () => {
 				}
 			}
 
-			// Store the function instead of the mock implementation
-			originalMockStream = createSuccessResponse
-			mockStream.mockImplementation(createSuccessResponse)
+			// Store the mock implementation directly
+			originalMockStream = jest.fn().mockImplementation(createSuccessResponse)
+			mockStream.mockImplementation(originalMockStream)
 			mockStream.mockClear()
 		})
 
@@ -238,7 +238,7 @@ describe("MistralHandler", () => {
 					error.name = "RateLimitError"
 					throw error
 				}
-				// Call the function directly instead of the mock
+				// Call the original mock implementation
 				return originalMockStream()
 			})
 

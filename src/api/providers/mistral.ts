@@ -549,17 +549,29 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 	 * @param response The HTTP response object
 	 */
 	protected async handleRateLimit(response: Response): Promise<void> {
+		this.logDebug(`Handling rate limit response: ${response.status} ${response.statusText}`)
+
 		try {
 			const rateLimitRemaining = response.headers.get("x-ratelimit-remaining")
 			const rateLimitReset = response.headers.get("x-ratelimit-reset")
 			const retryAfter = response.headers.get("retry-after")
 
+			this.logDebug(
+				`Rate limit headers - Remaining: ${rateLimitRemaining}, Reset: ${rateLimitReset}, Retry-After: ${retryAfter}`,
+			)
+
 			// Try to get error message from response body
 			const message = await response
 				.clone()
 				.json()
-				.then((data) => (data as MistralErrorResponse).error?.message || "Rate limit exceeded")
-				.catch(() => "Rate limit exceeded")
+				.then((data) => {
+					this.logDebug(`Rate limit response body: ${JSON.stringify(data)}`)
+					return (data as MistralErrorResponse).error?.message || "Rate limit exceeded"
+				})
+				.catch((err) => {
+					this.logDebug(`Failed to parse rate limit response body: ${err}`)
+					return "Rate limit exceeded"
+				})
 
 			if (rateLimitRemaining !== null && rateLimitReset !== null) {
 				const remaining = parseInt(rateLimitRemaining, 10)

@@ -365,16 +365,6 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		}
 	}
 
-	private extractText(content: MistralContent): string {
-		if (typeof content === "string") {
-			return content
-		}
-		return content
-			.filter((chunk): chunk is TextContent => chunk.type === "text")
-			.map((chunk) => chunk.text)
-			.join("")
-	}
-
 	override async *createMessage(
 		systemPrompt: string,
 		messages: Anthropic.Messages.MessageParam[],
@@ -552,13 +542,18 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 		this.logDebug(`Handling rate limit response: ${response.status} ${response.statusText}`)
 
 		try {
-			const rateLimitRemaining = response.headers.get("x-ratelimit-remaining")
+			// Extract all rate limit headers
+			const rateLimitLimitMinute = response.headers.get("x-ratelimit-limit-minute")
+			const rateLimitRemainingMinute = response.headers.get("x-ratelimit-remaining-minute")
+			const rateLimitLimitDay = response.headers.get("x-ratelimit-limit-day")
+			const rateLimitRemainingDay = response.headers.get("x-ratelimit-remaining-day")
 			const rateLimitReset = response.headers.get("x-ratelimit-reset")
 			const retryAfter = response.headers.get("retry-after")
 
-			this.logDebug(
-				`Rate limit headers - Remaining: ${rateLimitRemaining}, Reset: ${rateLimitReset}, Retry-After: ${retryAfter}`,
-			)
+			// Log all headers for debugging
+			response.headers.forEach((value, key) => {
+				this.logDebug(`${key}: ${value}`)
+			})
 
 			// Try to get error message from response body
 			const message = await response
@@ -573,15 +568,37 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 					return "Rate limit exceeded"
 				})
 
-			if (rateLimitRemaining !== null && rateLimitReset !== null) {
-				const remaining = parseInt(rateLimitRemaining, 10)
-				const resetTime = new Date(parseInt(rateLimitReset, 10) * 1000)
+			// Format a clear user message based on available rate limit information
+			if (rateLimitRemainingMinute !== null && rateLimitLimitMinute !== null) {
+				const remainingMinute = parseInt(rateLimitRemainingMinute, 10)
+				const limitMinute = parseInt(rateLimitLimitMinute, 10)
+				const remainingDay = rateLimitRemainingDay ? parseInt(rateLimitRemainingDay, 10) : null
+				const limitDay = rateLimitLimitDay ? parseInt(rateLimitLimitDay, 10) : null
 
-				if (remaining <= 0) {
-					const waitTime = retryAfter ? `${retryAfter} seconds` : resetTime.toLocaleString()
-					vscode.window.showErrorMessage(`${message}. Retry after ${waitTime}`)
+				// Calculate percentage of limits remaining
+				const percentRemainingMinute = (remainingMinute / limitMinute) * 100
+				const percentRemainingDay =
+					remainingDay !== null && limitDay !== null ? (remainingDay / limitDay) * 100 : null
+
+				let userMessage = `${message}. `
+
+				if (remainingMinute <= 0) {
+					const waitTime = rateLimitReset ? `${rateLimitReset} seconds` : "some time"
+					userMessage += `Minute limit reached (${limitMinute} requests). Please wait ${waitTime} before trying again.`
+					vscode.window.showErrorMessage(userMessage)
+				} else if (percentRemainingMinute <= 20) {
+					// Warning for approaching minute limit
+					userMessage += `⚠️ Approaching minute limit: ${remainingMinute}/${limitMinute} requests remaining (${percentRemainingMinute.toFixed(0)}%).`
+					vscode.window.showWarningMessage(userMessage)
+				} else if (percentRemainingDay !== null && percentRemainingDay <= 10) {
+					// Warning for approaching daily limit
+					userMessage += `⚠️ Approaching daily limit: ${remainingDay}/${limitDay} requests remaining (${percentRemainingDay.toFixed(0)}%).`
+					vscode.window.showWarningMessage(userMessage)
 				} else {
-					vscode.window.showWarningMessage(`${message}. ${remaining} requests remaining.`)
+					// Just log the current status without showing a notification
+					this.logDebug(
+						`Rate limit status: ${remainingMinute}/${limitMinute} minute requests, ${remainingDay}/${limitDay} daily requests`,
+					)
 				}
 			} else if (retryAfter) {
 				vscode.window.showErrorMessage(`${message}. Retry after ${retryAfter} seconds.`)
@@ -589,6 +606,7 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 				vscode.window.showErrorMessage(message)
 			}
 		} catch (error) {
+			this.logDebug(`Error handling rate limit: ${error}`)
 			vscode.window.showErrorMessage("Rate limit exceeded")
 		}
 	}

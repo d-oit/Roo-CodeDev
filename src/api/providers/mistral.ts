@@ -110,6 +110,9 @@ interface MistralErrorResponse {
 }
 
 export class MistralHandler extends BaseProvider implements SingleCompletionHandler {
+	// Add a new property to indicate this handler has built-in rate limiting
+	override readonly hasBuiltInRateLimiting: boolean = true
+
 	protected options: ApiHandlerOptions
 	private client: Mistral
 	private readonly enableDebugOutput: boolean

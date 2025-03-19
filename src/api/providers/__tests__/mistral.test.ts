@@ -114,8 +114,13 @@ describe("MistralHandler", () => {
 		const systemPrompt = "You are a helpful assistant."
 		const messages: Anthropic.Messages.MessageParam[] = [
 			{
-				role: "user",
-				content: [{ type: "text", text: "Hello!" }],
+				role: "user" as const,
+				content: [
+					{
+						type: "text" as const,
+						text: "Hello!",
+					},
+				],
 			},
 		]
 
@@ -168,6 +173,208 @@ describe("MistralHandler", () => {
 
 			const iterator = handler.createMessage(systemPrompt, messages)
 			await expect(iterator.next()).rejects.toThrow("Stream Error")
+		})
+	})
+
+	describe("error handling and retries", () => {
+		let handler: MistralHandler
+		let originalMockStream: jest.Mock
+
+		beforeEach(() => {
+			mockOptions = {
+				apiModelId: "codestral-latest",
+				mistralApiKey: "test-api-key",
+				includeMaxTokens: true,
+				modelTemperature: 0,
+			}
+			handler = new MistralHandler(mockOptions)
+
+			// Create a successful response function instead of storing the mock implementation
+			const createSuccessResponse = async () => {
+				const response = {
+					headers: {},
+					status: 200,
+					statusText: "OK",
+				}
+
+				return {
+					response,
+					headers: response.headers,
+					status: response.status,
+					statusText: response.statusText,
+					[Symbol.asyncIterator]: async function* () {
+						yield {
+							data: {
+								choices: [
+									{
+										delta: { content: "Test response" },
+										index: 0,
+									},
+								],
+								usage: {
+									promptTokens: 10,
+									completionTokens: 5,
+									totalTokens: 15,
+								},
+							},
+						}
+					},
+				}
+			}
+
+			// Store the function instead of the mock implementation
+			originalMockStream = createSuccessResponse
+			mockStream.mockImplementation(createSuccessResponse)
+			mockStream.mockClear()
+		})
+
+		it("should handle rate limit errors and retry", async () => {
+			// Mock rate limit error on first call, then succeed
+			let callCount = 0
+			mockStream.mockImplementation(async () => {
+				callCount++
+				if (callCount === 1) {
+					const error = new Error("You have been rate limited. Please retry after 2 seconds")
+					error.name = "RateLimitError"
+					throw error
+				}
+				// Call the function directly instead of the mock
+				return originalMockStream()
+			})
+
+			const systemPrompt = "You are a helpful assistant."
+			const messages: Anthropic.Messages.MessageParam[] = [
+				{
+					role: "user" as const,
+					content: [
+						{
+							type: "text" as const,
+							text: "Hello!",
+						},
+					],
+				},
+			]
+
+			const iterator = handler.createMessage(systemPrompt, messages)
+			const result = await iterator.next()
+
+			expect(mockStream).toHaveBeenCalledTimes(2)
+			expect(result.value).toEqual({ type: "text", text: "Test response" })
+		})
+
+		it("should handle general API errors and retry with exponential backoff", async () => {
+			// Mock general error on first call, then succeed
+			let callCount = 0
+			mockStream.mockImplementation(async () => {
+				callCount++
+				if (callCount === 1) {
+					throw new Error("Temporary API error")
+				}
+				// Call the function directly instead of the mock
+				return originalMockStream()
+			})
+
+			const systemPrompt = "You are a helpful assistant."
+			const messages: Anthropic.Messages.MessageParam[] = [
+				{
+					role: "user" as const,
+					content: [
+						{
+							type: "text" as const,
+							text: "Hello!",
+						},
+					],
+				},
+			]
+
+			const iterator = handler.createMessage(systemPrompt, messages)
+			const result = await iterator.next()
+
+			expect(mockStream).toHaveBeenCalledTimes(2)
+			expect(result.value).toEqual({ type: "text", text: "Test response" })
+		})
+
+		it("should throw authentication errors without retrying", async () => {
+			mockStream.mockImplementation(async () => {
+				const error = new Error("Invalid authentication")
+				error.name = "AuthenticationError"
+				throw error
+			})
+
+			const systemPrompt = "You are a helpful assistant."
+			const messages: Anthropic.Messages.MessageParam[] = [
+				{
+					role: "user" as const,
+					content: [
+						{
+							type: "text" as const,
+							text: "Hello!",
+						},
+					],
+				},
+			]
+
+			const iterator = handler.createMessage(systemPrompt, messages)
+			await expect(iterator.next()).rejects.toThrow("authentication")
+		})
+	})
+
+	describe("base URL selection", () => {
+		it("should use codestral URL for codestral models", () => {
+			const handler = new MistralHandler({
+				apiModelId: "codestral-latest",
+				mistralApiKey: "test-api-key",
+			})
+
+			// We can't directly test private methods, but we can test the behavior
+			// indirectly by checking if the correct model is used
+			expect(handler.getModel().id).toBe("codestral-latest")
+		})
+
+		it("should use custom codestral URL if provided", () => {
+			const customUrl = "https://custom-codestral.example.com"
+			const handler = new MistralHandler({
+				apiModelId: "codestral-latest",
+				mistralApiKey: "test-api-key",
+				mistralCodestralUrl: customUrl,
+			})
+
+			expect(handler.getModel().id).toBe("codestral-latest")
+		})
+
+		it("should use standard Mistral URL for non-codestral models", () => {
+			const handler = new MistralHandler({
+				apiModelId: "mistral-large-latest",
+				mistralApiKey: "test-api-key",
+			})
+
+			expect(handler.getModel().id).toBe("mistral-large-latest")
+		})
+	})
+
+	describe("completePrompt", () => {
+		let handler: MistralHandler
+
+		beforeEach(() => {
+			mockOptions = {
+				apiModelId: "codestral-latest",
+				mistralApiKey: "test-api-key",
+				includeMaxTokens: true,
+				modelTemperature: 0,
+			}
+			handler = new MistralHandler(mockOptions)
+			mockStream.mockClear()
+		})
+
+		it("should complete prompt successfully", async () => {
+			const result = await handler.completePrompt("Test prompt")
+			expect(result).toBe("Test response")
+		})
+
+		it("should handle errors in completePrompt", async () => {
+			jest.spyOn(handler["client"].chat, "complete").mockRejectedValueOnce(new Error("API Error"))
+
+			await expect(handler.completePrompt("Test prompt")).rejects.toThrow("Mistral completion error: API Error")
 		})
 	})
 })

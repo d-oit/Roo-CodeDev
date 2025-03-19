@@ -14,6 +14,9 @@ const TOKEN_FUDGE_FACTOR = 1.5
 import * as vscode from "vscode"
 
 export abstract class BaseProvider implements ApiHandler {
+	// Add the property with a default value of false
+	readonly hasBuiltInRateLimiting: boolean = false
+
 	// Cache the Tiktoken encoder instance since it's stateless
 	private encoder: Tiktoken | null = null
 	abstract createMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useEvent } from "react-use"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { ExtensionMessage } from "../../src/shared/ExtensionMessage"
-import { ShowHumanRelayDialogMessage } from "../../src/shared/ExtensionMessage"
+import TranslationProvider from "./i18n/TranslationContext"
 
 import { vscode } from "./utils/vscode"
 import { telemetryClient } from "./utils/TelemetryClient"
@@ -16,12 +17,6 @@ import PromptsView from "./components/prompts/PromptsView"
 import { HumanRelayDialog } from "./components/human-relay/HumanRelayDialog"
 
 type Tab = "settings" | "history" | "mcp" | "prompts" | "chat"
-
-type HumanRelayDialogState = {
-	isOpen: boolean
-	requestId: string
-	promptText: string
-}
 
 const tabsByMessageAction: Partial<Record<NonNullable<ExtensionMessage["action"]>, Tab>> = {
 	chatButtonClicked: "chat",
@@ -37,7 +32,12 @@ const App = () => {
 
 	const [showAnnouncement, setShowAnnouncement] = useState(false)
 	const [tab, setTab] = useState<Tab>("chat")
-	const [humanRelayDialogState, setHumanRelayDialogState] = useState<HumanRelayDialogState>({
+
+	const [humanRelayDialogState, setHumanRelayDialogState] = useState<{
+		isOpen: boolean
+		requestId: string
+		promptText: string
+	}>({
 		isOpen: false,
 		requestId: "",
 		promptText: "",
@@ -64,14 +64,10 @@ const App = () => {
 					switchTab(newTab)
 				}
 			}
-			const mes: ShowHumanRelayDialogMessage = message as ShowHumanRelayDialogMessage
-			// Processing displays human relay dialog messages
-			if (mes.type === "showHumanRelayDialog" && mes.requestId && mes.promptText) {
-				setHumanRelayDialogState({
-					isOpen: true,
-					requestId: mes.requestId,
-					promptText: mes.promptText,
-				})
+
+			if (message.type === "showHumanRelayDialog" && message.requestId && message.promptText) {
+				const { requestId, promptText } = message
+				setHumanRelayDialogState({ isOpen: true, requestId, promptText })
 			}
 		},
 		[switchTab],
@@ -93,9 +89,7 @@ const App = () => {
 	}, [telemetrySetting, telemetryKey, machineId, didHydrateState])
 
 	// Tell the extension that we are ready to receive messages.
-	useEffect(() => {
-		vscode.postMessage({ type: "webviewDidLaunch" })
-	}, [])
+	useEffect(() => vscode.postMessage({ type: "webviewDidLaunch" }), [])
 
 	if (!didHydrateState) {
 		return null
@@ -129,9 +123,15 @@ const App = () => {
 	)
 }
 
+const queryClient = new QueryClient()
+
 const AppWithProviders = () => (
 	<ExtensionStateContextProvider>
-		<App />
+		<TranslationProvider>
+			<QueryClientProvider client={queryClient}>
+				<App />
+			</QueryClientProvider>
+		</TranslationProvider>
 	</ExtensionStateContextProvider>
 )
 

@@ -7,6 +7,7 @@ import { ClineProvider } from "../ClineProvider"
 import { ExtensionMessage, ExtensionState } from "../../../shared/ExtensionMessage"
 import { GlobalStateKey, SecretKey } from "../../../shared/globalState"
 import { setSoundEnabled } from "../../../utils/sound"
+import { setTtsEnabled } from "../../../utils/tts"
 import { defaultModeSlug } from "../../../shared/modes"
 import { experimentDefault } from "../../../shared/experiments"
 import { Cline } from "../../Cline"
@@ -19,6 +20,8 @@ jest.mock("../../contextProxy", () => {
 	return {
 		ContextProxy: jest.fn().mockImplementation((context) => ({
 			originalContext: context,
+			isInitialized: true,
+			initialize: jest.fn(),
 			extensionUri: context.extensionUri,
 			extensionPath: context.extensionPath,
 			globalStorageUri: context.globalStorageUri,
@@ -50,6 +53,78 @@ jest.mock("../../contextProxy", () => {
 			}),
 		})),
 	}
+})
+
+describe("validateTaskHistory", () => {
+	let provider: ClineProvider
+	let mockContext: vscode.ExtensionContext
+	let mockOutputChannel: vscode.OutputChannel
+	let mockUpdate: jest.Mock
+
+	beforeEach(() => {
+		// Reset mocks
+		jest.clearAllMocks()
+
+		mockUpdate = jest.fn()
+
+		// Setup basic mocks
+		mockContext = {
+			globalState: {
+				get: jest.fn(),
+				update: mockUpdate,
+				keys: jest.fn().mockReturnValue([]),
+			},
+			secrets: { get: jest.fn(), store: jest.fn(), delete: jest.fn() },
+			extensionUri: {} as vscode.Uri,
+			globalStorageUri: { fsPath: "/test/path" },
+			extension: { packageJSON: { version: "1.0.0" } },
+		} as unknown as vscode.ExtensionContext
+
+		mockOutputChannel = { appendLine: jest.fn() } as unknown as vscode.OutputChannel
+		provider = new ClineProvider(mockContext, mockOutputChannel)
+	})
+
+	test("should remove tasks with missing files", async () => {
+		// Mock the global state with some test data
+		const mockHistory = [
+			{ id: "task1", ts: Date.now() },
+			{ id: "task2", ts: Date.now() },
+		]
+
+		// Setup mocks
+		jest.spyOn(mockContext.globalState, "get").mockReturnValue(mockHistory)
+
+		// Mock fileExistsAtPath to only return true for task1
+		const mockFs = require("../../../utils/fs")
+		mockFs.fileExistsAtPath = jest.fn().mockImplementation((path) => Promise.resolve(path.includes("task1")))
+
+		// Call validateTaskHistory
+		await provider.validateTaskHistory()
+
+		// Verify the results
+		const expectedHistory = [expect.objectContaining({ id: "task1" })]
+
+		expect(mockUpdate).toHaveBeenCalledWith("taskHistory", expect.arrayContaining(expectedHistory))
+		expect(mockUpdate.mock.calls[0][1].length).toBe(1)
+	})
+
+	test("should handle empty history", async () => {
+		// Mock empty history
+		jest.spyOn(mockContext.globalState, "get").mockReturnValue([])
+
+		await provider.validateTaskHistory()
+
+		expect(mockUpdate).toHaveBeenCalledWith("taskHistory", [])
+	})
+
+	test("should handle null history", async () => {
+		// Mock null history
+		jest.spyOn(mockContext.globalState, "get").mockReturnValue(null)
+
+		await provider.validateTaskHistory()
+
+		expect(mockUpdate).toHaveBeenCalledWith("taskHistory", [])
+	})
 })
 
 // Mock dependencies
@@ -195,6 +270,11 @@ jest.mock("vscode", () => ({
 // Mock sound utility
 jest.mock("../../../utils/sound", () => ({
 	setSoundEnabled: jest.fn(),
+}))
+
+// Mock tts utility
+jest.mock("../../../utils/tts", () => ({
+	setTtsEnabled: jest.fn(),
 }))
 
 // Mock ESM modules
@@ -418,7 +498,6 @@ describe("ClineProvider", () => {
 
 		const mockState: ExtensionState = {
 			version: "1.0.0",
-			preferredLanguage: "English",
 			clineMessages: [],
 			taskHistory: [],
 			shouldShowAnnouncement: false,
@@ -433,6 +512,7 @@ describe("ClineProvider", () => {
 			alwaysAllowMcp: false,
 			uriScheme: "vscode",
 			soundEnabled: false,
+			ttsEnabled: false,
 			diffEnabled: false,
 			enableCheckpoints: false,
 			checkpointStorage: "task",
@@ -447,9 +527,11 @@ describe("ClineProvider", () => {
 			customModes: [],
 			experiments: experimentDefault,
 			maxOpenTabsContext: 20,
+			maxWorkspaceFiles: 200,
 			browserToolEnabled: true,
 			telemetrySetting: "unset",
 			showRooIgnoredFiles: true,
+			renderContext: "sidebar",
 		}
 
 		const message: ExtensionMessage = {
@@ -529,24 +611,17 @@ describe("ClineProvider", () => {
 		expect(state).toHaveProperty("alwaysAllowBrowser")
 		expect(state).toHaveProperty("taskHistory")
 		expect(state).toHaveProperty("soundEnabled")
+		expect(state).toHaveProperty("ttsEnabled")
 		expect(state).toHaveProperty("diffEnabled")
 		expect(state).toHaveProperty("writeDelayMs")
 	})
 
-	test("preferredLanguage defaults to VSCode language when not set", async () => {
+	test("language is set to VSCode language", async () => {
 		// Mock VSCode language as Spanish
 		;(vscode.env as any).language = "es-ES"
 
 		const state = await provider.getState()
-		expect(state.preferredLanguage).toBe("Spanish")
-	})
-
-	test("preferredLanguage defaults to English for unsupported VSCode language", async () => {
-		// Mock VSCode language as an unsupported language
-		;(vscode.env as any).language = "unsupported-LANG"
-
-		const state = await provider.getState()
-		expect(state.preferredLanguage).toBe("English")
+		expect(state.language).toBe("es-ES")
 	})
 
 	test("diffEnabled defaults to true when not set", async () => {
@@ -599,6 +674,18 @@ describe("ClineProvider", () => {
 		await messageHandler({ type: "soundEnabled", bool: false })
 		expect(setSoundEnabled).toHaveBeenCalledWith(false)
 		expect(mockContext.globalState.update).toHaveBeenCalledWith("soundEnabled", false)
+		expect(mockPostMessage).toHaveBeenCalled()
+
+		// Simulate setting tts to enabled
+		await messageHandler({ type: "ttsEnabled", bool: true })
+		expect(setTtsEnabled).toHaveBeenCalledWith(true)
+		expect(mockContext.globalState.update).toHaveBeenCalledWith("ttsEnabled", true)
+		expect(mockPostMessage).toHaveBeenCalled()
+
+		// Simulate setting tts to disabled
+		await messageHandler({ type: "ttsEnabled", bool: false })
+		expect(setTtsEnabled).toHaveBeenCalledWith(false)
+		expect(mockContext.globalState.update).toHaveBeenCalledWith("ttsEnabled", false)
 		expect(mockPostMessage).toHaveBeenCalled()
 	})
 
@@ -801,7 +888,18 @@ describe("ClineProvider", () => {
 		expect(state.customModePrompts).toEqual({})
 	})
 
-	test("uses mode-specific custom instructions in Cline initialization", async () => {
+	test("handles maxWorkspaceFiles message", async () => {
+		await provider.resolveWebviewView(mockWebviewView)
+		const messageHandler = (mockWebviewView.webview.onDidReceiveMessage as jest.Mock).mock.calls[0][0]
+
+		await messageHandler({ type: "maxWorkspaceFiles", value: 300 })
+
+		expect(mockContextProxy.updateGlobalState).toHaveBeenCalledWith("maxWorkspaceFiles", 300)
+		expect(mockContext.globalState.update).toHaveBeenCalledWith("maxWorkspaceFiles", 300)
+		expect(mockPostMessage).toHaveBeenCalled()
+	})
+
+	test.only("uses mode-specific custom instructions in Cline initialization", async () => {
 		// Setup mock state
 		const modeCustomInstructions = "Code mode instructions"
 		const mockApiConfig = {
@@ -840,6 +938,9 @@ describe("ClineProvider", () => {
 			fuzzyMatchThreshold: 1.0,
 			task: "Test task",
 			experiments: experimentDefault,
+			rootTask: undefined,
+			parentTask: undefined,
+			taskNumber: 1,
 		})
 	})
 
@@ -1214,7 +1315,7 @@ describe("ClineProvider", () => {
 			expect(callArgs[4]).toHaveProperty("getToolDescription") // diffStrategy
 			expect(callArgs[5]).toBe("900x600") // browserViewportSize
 			expect(callArgs[6]).toBe("code") // mode
-			expect(callArgs[11]).toBe(true) // diffEnabled
+			expect(callArgs[10]).toBe(true) // diffEnabled
 
 			// Run the test again to verify it's consistent
 			await handler({ type: "getSystemPrompt", mode: "code" })
@@ -1272,7 +1373,7 @@ describe("ClineProvider", () => {
 			expect(callArgs[4]).toHaveProperty("getToolDescription") // diffStrategy
 			expect(callArgs[5]).toBe("900x600") // browserViewportSize
 			expect(callArgs[6]).toBe("code") // mode
-			expect(callArgs[11]).toBe(false) // diffEnabled should be false
+			expect(callArgs[10]).toBe(false) // diffEnabled should be false
 		})
 
 		test("uses correct mode-specific instructions when mode is specified", async () => {

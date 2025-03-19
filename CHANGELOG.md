@@ -1,5 +1,71 @@
 # Roo Code Changelog
 
+## [3.9.2] - 2025-03-19
+
+- Update GitHub Actions workflow to automatically create GitHub Releases (thanks @pdecat!)
+- Correctly persist the text-to-speech speed state (thanks @heyseth!)
+- Fixes to French translations (thanks @arthurauffray!)
+- Optimize build time for local development (thanks @KJ7LNW!)
+- VSCode theme fixes for select, dropdown and command components
+- Bring back the ability to manually enter a model name in the model picker
+- Fix internationalization of the announcement title and the browser
+
+## [3.9.1] - 2025-03-18
+
+- Pass current language to system prompt correctly so Roo thinks and speaks in the selected language
+
+## [3.9.0] - 2025-03-18
+
+- Internationalize Roo Code into Catalan, German, Spanish, French, Hindi, Italian, Japanese, Korean, Polish, Portuguese, Turkish, Vietnamese, Simplified Chinese, and Traditional Chinese (thanks @feifei325!)
+- Bring back support for MCP over SSE (thanks @aheizi!)
+- Add a text-to-speech option to have Roo talk to you as it works (thanks @heyseth!)
+- Choose a specific provider when using OpenRouter (thanks PhunkyBob!)
+- Support batch deletion of task history (thanks @aheizi!)
+- Internationalize Human Relay, adjust the layout, and make it work on the welcome screen (thanks @NyxJae!)
+- Fix shell integration race condition (thanks @KJ7LNW!)
+- Fix display updating for Bedrock custom ARNs that are prompt routers (thanks @Smartsheet-JB-Brown!)
+- Fix to exclude search highlighting when copying items from task history (thanks @im47cn!)
+- Fix context mentions to work with multiple-workspace projects (thanks @teddyOOXX!)
+- Fix to task history saving when running multiple Roos (thanks @samhvw8!)
+- Improve task deletion when underlying files are missing (thanks @GitlyHallows!)
+- Improve support for NixOS & direnv (thanks @wkordalski!)
+- Fix wheel scrolling when Roo is opened in editor tabs (thanks @GitlyHallows!)
+- Don’t automatically mention the file when using the "Add to context" code action (thanks @qdaxb!)
+- Expose task stack in `RooCodeAPI` (thanks @franekp!)
+- Give the models visibility into the current task's API cost
+
+## [3.8.6] - 2025-03-13
+
+- Revert SSE MCP support while we debug some config validation issues
+
+## [3.8.5] - 2025-03-12
+
+- Refactor terminal architecture to address critical issues with the current design (thanks @KJ7LNW!)
+- MCP over SSE (thanks @aheizi!)
+- Support for remote browser connections (thanks @afshawnlotfi!)
+- Preserve parent-child relationship when cancelling subtasks (thanks @cannuri!)
+- Custom baseUrl for Google AI Studio Gemini (thanks @dqroid!)
+- PowerShell-specific command handling (thanks @KJ7LNW!)
+- OpenAI-compatible DeepSeek/QwQ reasoning support (thanks @lightrabbit!)
+- Anthropic-style prompt caching in the OpenAI-compatible provider (thanks @dleen!)
+- Add Deepseek R1 for AWS Bedrock (thanks @ATempsch!)
+- Fix MarkdownBlock text color for Dark High Contrast theme (thanks @cannuri!)
+- Add gemini-2.0-pro-exp-02-05 model to vertex (thanks @shohei-ihaya!)
+- Bring back progress status for multi-diff edits (thanks @qdaxb!)
+- Refactor alert dialog styles to use the correct vscode theme (thanks @cannuri!)
+- Custom ARNs in AWS Bedrock (thanks @Smartsheet-JB-Brown!)
+- Update MCP servers directory path for platform compatibility (thanks @hannesrudolph!)
+- Fix browser system prompt inclusion rules (thanks @cannuri!)
+- Publish git tags to github from CI (thanks @pdecat!)
+- Fixes to OpenAI-style cost calculations (thanks @dtrugman!)
+- Fix to allow using an excluded directory as your working directory (thanks @Szpadel!)
+- Kotlin language support in list_code_definition_names tool (thanks @kohii!)
+- Better handling of diff application errors (thanks @qdaxb!)
+- Update Bedrock prices to the latest (thanks @Smartsheet-JB-Brown!)
+- Fixes to OpenRouter custom baseUrl support
+- Fix usage tracking for SiliconFlow and other providers that include usage on every chunk
+- Telemetry for checkpoint save/restore/diff and diff strategies
+
 ## [3.8.4] - 2025-03-09
 
 - Roll back multi-diff progress indicator temporarily to fix a double-confirmation in saving edits

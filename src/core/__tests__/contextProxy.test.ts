@@ -1,15 +1,11 @@
+// npx jest src/core/__tests__/contextProxy.test.ts
+
 import * as vscode from "vscode"
 import { ContextProxy } from "../contextProxy"
+
 import { logger } from "../../utils/logging"
-import { GLOBAL_STATE_KEYS, SECRET_KEYS } from "../../shared/globalState"
+import { GLOBAL_STATE_KEYS, SECRET_KEYS, ConfigurationKey, GlobalStateKey } from "../../shared/globalState"
 
-// Mock shared/globalState
-jest.mock("../../shared/globalState", () => ({
-	GLOBAL_STATE_KEYS: ["apiProvider", "apiModelId", "mode"],
-	SECRET_KEYS: ["apiKey", "openAiApiKey"],
-}))
-
-// Mock VSCode API
 jest.mock("vscode", () => ({
 	Uri: {
 		file: jest.fn((path) => ({ path })),
@@ -27,7 +23,7 @@ describe("ContextProxy", () => {
 	let mockGlobalState: any
 	let mockSecrets: any
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		// Reset mocks
 		jest.clearAllMocks()
 
@@ -58,6 +54,7 @@ describe("ContextProxy", () => {
 
 		// Create proxy instance
 		proxy = new ContextProxy(mockContext)
+		await proxy.initialize()
 	})
 
 	describe("read-only pass-through properties", () => {
@@ -90,10 +87,10 @@ describe("ContextProxy", () => {
 	describe("getGlobalState", () => {
 		it("should return value from cache when it exists", async () => {
 			// Manually set a value in the cache
-			await proxy.updateGlobalState("test-key", "cached-value")
+			await proxy.updateGlobalState("apiProvider", "cached-value")
 
 			// Should return the cached value
-			const result = proxy.getGlobalState("test-key")
+			const result = proxy.getGlobalState("apiProvider")
 			expect(result).toBe("cached-value")
 
 			// Original context should be called once during updateGlobalState
@@ -102,55 +99,93 @@ describe("ContextProxy", () => {
 
 		it("should handle default values correctly", async () => {
 			// No value in cache
-			const result = proxy.getGlobalState("unknown-key", "default-value")
+			const result = proxy.getGlobalState("apiProvider", "default-value")
+			expect(result).toBe("default-value")
+		})
+
+		it("should bypass cache for pass-through state keys", async () => {
+			// Setup mock return value
+			mockGlobalState.get.mockReturnValue("pass-through-value")
+
+			// Use a pass-through key (taskHistory)
+			const result = proxy.getGlobalState("taskHistory" as GlobalStateKey)
+
+			// Should get value directly from original context
+			expect(result).toBe("pass-through-value")
+			expect(mockGlobalState.get).toHaveBeenCalledWith("taskHistory")
+		})
+
+		it("should respect default values for pass-through state keys", async () => {
+			// Setup mock to return undefined
+			mockGlobalState.get.mockReturnValue(undefined)
+
+			// Use a pass-through key with default value
+			const result = proxy.getGlobalState("taskHistory" as GlobalStateKey, "default-value")
+
+			// Should return default value when original context returns undefined
 			expect(result).toBe("default-value")
 		})
 	})
 
 	describe("updateGlobalState", () => {
 		it("should update state directly in original context", async () => {
-			await proxy.updateGlobalState("test-key", "new-value")
+			await proxy.updateGlobalState("apiProvider", "new-value")
 
 			// Should have called original context
-			expect(mockGlobalState.update).toHaveBeenCalledWith("test-key", "new-value")
+			expect(mockGlobalState.update).toHaveBeenCalledWith("apiProvider", "new-value")
 
 			// Should have stored the value in cache
-			const storedValue = await proxy.getGlobalState("test-key")
+			const storedValue = await proxy.getGlobalState("apiProvider")
 			expect(storedValue).toBe("new-value")
+		})
+
+		it("should bypass cache for pass-through state keys", async () => {
+			await proxy.updateGlobalState("taskHistory" as GlobalStateKey, "new-value")
+
+			// Should update original context
+			expect(mockGlobalState.update).toHaveBeenCalledWith("taskHistory", "new-value")
+
+			// Setup mock for subsequent get
+			mockGlobalState.get.mockReturnValue("new-value")
+
+			// Should get fresh value from original context
+			const storedValue = proxy.getGlobalState("taskHistory" as GlobalStateKey)
+			expect(storedValue).toBe("new-value")
+			expect(mockGlobalState.get).toHaveBeenCalledWith("taskHistory")
 		})
 	})
 
 	describe("getSecret", () => {
 		it("should return value from cache when it exists", async () => {
 			// Manually set a value in the cache
-			await proxy.storeSecret("api-key", "cached-secret")
+			await proxy.storeSecret("apiKey", "cached-secret")
 
 			// Should return the cached value
-			const result = proxy.getSecret("api-key")
+			const result = proxy.getSecret("apiKey")
 			expect(result).toBe("cached-secret")
 		})
 	})
 
 	describe("storeSecret", () => {
 		it("should store secret directly in original context", async () => {
-			await proxy.storeSecret("api-key", "new-secret")
+			await proxy.storeSecret("apiKey", "new-secret")
 
 			// Should have called original context
-			expect(mockSecrets.store).toHaveBeenCalledWith("api-key", "new-secret")
+			expect(mockSecrets.store).toHaveBeenCalledWith("apiKey", "new-secret")
 
 			// Should have stored the value in cache
-			const storedValue = await proxy.getSecret("api-key")
+			const storedValue = await proxy.getSecret("apiKey")
 			expect(storedValue).toBe("new-secret")
 		})
 
 		it("should handle undefined value for secret deletion", async () => {
-			await proxy.storeSecret("api-key", undefined)
+			await proxy.storeSecret("apiKey", undefined)
 
 			// Should have called delete on original context
-			expect(mockSecrets.delete).toHaveBeenCalledWith("api-key")
+			expect(mockSecrets.delete).toHaveBeenCalledWith("apiKey")
 
 			// Should have stored undefined in cache
-			const storedValue = await proxy.getSecret("api-key")
+			const storedValue = await proxy.getSecret("apiKey")
 			expect(storedValue).toBeUndefined()
 		})
 	})
@@ -194,7 +229,7 @@ describe("ContextProxy", () => {
 			const updateGlobalStateSpy = jest.spyOn(proxy, "updateGlobalState")
 
 			// Test with an unknown key
-			await proxy.setValue("unknownKey", "some-value")
+			await proxy.setValue("unknownKey" as ConfigurationKey, "some-value")
 
 			// Should have logged a warning
 			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Unknown key: unknownKey"))
@@ -203,7 +238,7 @@ describe("ContextProxy", () => {
 			expect(updateGlobalStateSpy).toHaveBeenCalledWith("unknownKey", "some-value")
 
 			// Should have stored the value in state cache
-			const storedValue = proxy.getGlobalState("unknownKey")
+			const storedValue = proxy.getGlobalState("unknownKey" as GlobalStateKey)
 			expect(storedValue).toBe("some-value")
 		})
 	})
@@ -241,18 +276,76 @@ describe("ContextProxy", () => {
 			await proxy.setValues({
 				apiModelId: "gpt-4", // global state
 				openAiApiKey: "test-api-key", // secret
-				unknownKey: "some-value", // unknown
 			})
 
 			// Should have called appropriate methods
 			expect(storeSecretSpy).toHaveBeenCalledWith("openAiApiKey", "test-api-key")
 			expect(updateGlobalStateSpy).toHaveBeenCalledWith("apiModelId", "gpt-4")
-			expect(updateGlobalStateSpy).toHaveBeenCalledWith("unknownKey", "some-value")
 
 			// Should have stored values in appropriate caches
 			expect(proxy.getSecret("openAiApiKey")).toBe("test-api-key")
 			expect(proxy.getGlobalState("apiModelId")).toBe("gpt-4")
-			expect(proxy.getGlobalState("unknownKey")).toBe("some-value")
+		})
+	})
+
+	describe("setApiConfiguration", () => {
+		it("should clear old API configuration values and set new ones", async () => {
+			// Set up initial API configuration values
+			await proxy.updateGlobalState("apiModelId", "old-model")
+			await proxy.updateGlobalState("openAiBaseUrl", "https://old-url.com")
+			await proxy.updateGlobalState("modelTemperature", 0.7)
+
+			// Spy on setValues
+			const setValuesSpy = jest.spyOn(proxy, "setValues")
+
+			// Call setApiConfiguration with new configuration
+			await proxy.setApiConfiguration({
+				apiModelId: "new-model",
+				apiProvider: "anthropic",
+				// Note: openAiBaseUrl is not included in the new config
+			})
+
+			// Verify setValues was called with the correct parameters
+			// It should include undefined for openAiBaseUrl (to clear it)
+			// and the new values for apiModelId and apiProvider
+			expect(setValuesSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					apiModelId: "new-model",
+					apiProvider: "anthropic",
+					openAiBaseUrl: undefined,
+					modelTemperature: undefined,
+				}),
+			)
+
+			// Verify the state cache has been updated correctly
+			expect(proxy.getGlobalState("apiModelId")).toBe("new-model")
+			expect(proxy.getGlobalState("apiProvider")).toBe("anthropic")
+			expect(proxy.getGlobalState("openAiBaseUrl")).toBeUndefined()
+			expect(proxy.getGlobalState("modelTemperature")).toBeUndefined()
+		})
+
+		it("should handle empty API configuration", async () => {
+			// Set up initial API configuration values
+			await proxy.updateGlobalState("apiModelId", "old-model")
+			await proxy.updateGlobalState("openAiBaseUrl", "https://old-url.com")
+
+			// Spy on setValues
+			const setValuesSpy = jest.spyOn(proxy, "setValues")
+
+			// Call setApiConfiguration with empty configuration
+			await proxy.setApiConfiguration({})
+
+			// Verify setValues was called with undefined for all existing API config keys
+			expect(setValuesSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					apiModelId: undefined,
+					openAiBaseUrl: undefined,
+				}),
+			)
+
+			// Verify the state cache has been cleared
+			expect(proxy.getGlobalState("apiModelId")).toBeUndefined()
+			expect(proxy.getGlobalState("openAiBaseUrl")).toBeUndefined()
 		})
 	})
 
@@ -262,13 +355,11 @@ describe("ContextProxy", () => {
 			await proxy.setValues({
 				apiModelId: "gpt-4", // global state
 				openAiApiKey: "test-api-key", // secret
-				unknownKey: "some-value", // unknown
 			})
 
 			// Verify initial state
 			expect(proxy.getGlobalState("apiModelId")).toBe("gpt-4")
 			expect(proxy.getSecret("openAiApiKey")).toBe("test-api-key")
-			expect(proxy.getGlobalState("unknownKey")).toBe("some-value")
 
 			// Reset all state
 			await proxy.resetAllState()
@@ -277,7 +368,6 @@ describe("ContextProxy", () => {
 			// Since our mock globalState.get returns undefined by default,
 			// the cache should now contain undefined values
 			expect(proxy.getGlobalState("apiModelId")).toBeUndefined()
-			expect(proxy.getGlobalState("unknownKey")).toBeUndefined()
 		})
 
 		it("should update all global state keys to undefined", async () => {
@@ -317,15 +407,13 @@ describe("ContextProxy", () => {
 
 		it("should reinitialize caches after reset", async () => {
 			// Spy on initialization methods
-			const initStateCache = jest.spyOn(proxy as any, "initializeStateCache")
-			const initSecretCache = jest.spyOn(proxy as any, "initializeSecretCache")
+			const initializeSpy = jest.spyOn(proxy as any, "initialize")
 
 			// Reset all state
 			await proxy.resetAllState()
 
 			// Should reinitialize caches
-			expect(initStateCache).toHaveBeenCalledTimes(1)
-			expect(initSecretCache).toHaveBeenCalledTimes(1)
+			expect(initializeSpy).toHaveBeenCalledTimes(1)
 		})
 	})
 })

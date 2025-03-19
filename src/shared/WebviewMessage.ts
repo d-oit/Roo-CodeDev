@@ -107,8 +107,6 @@ export interface WebviewMessage {
 		| "discoverBrowser"
 		| "browserConnectionResult"
 		| "remoteBrowserEnabled"
-		| "mistralModelStreamingEnabled"
-		| "stopToken"
 	text?: string
 	disabled?: boolean
 	askResponse?: ClineAskResponse

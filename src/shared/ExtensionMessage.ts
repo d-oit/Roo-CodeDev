@@ -150,8 +150,6 @@ export interface ExtensionState {
 	telemetryKey?: string
 	machineId?: string
 	showRooIgnoredFiles: boolean // Whether to show .rooignore'd files in listings
-	mistralModelStreamingEnabled?: boolean // Whether to enable streaming for Mistral models
-	stopToken?: string // Custom stop token for Mistral models
 }
 
 export type { ClineMessage, ClineAsk, ClineSay }

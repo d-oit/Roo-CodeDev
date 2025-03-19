@@ -21,8 +21,6 @@ export type ApiProvider =
 export interface ApiHandlerOptions {
 	apiModelId?: string
 	apiKey?: string // anthropic
-	mistralModelStreamingEnabled?: boolean
-	stopToken?: string
 	anthropicBaseUrl?: string
 	vsCodeLmModelSelector?: vscode.LanguageModelChatSelector
 	glamaModelId?: string

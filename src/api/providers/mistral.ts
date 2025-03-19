@@ -8,6 +8,7 @@ import { ApiStreamChunk } from "../transform/stream"
 import { BaseProvider } from "./base-provider"
 import * as vscode from "vscode"
 import { logger } from "../../utils/logging"
+import { calculateApiCostOpenAI } from "../../utils/cost"
 
 // Create a custom debug logger that integrates with our existing logging system
 const createDebugLogger = (outputChannel?: vscode.OutputChannel, enableDebug?: boolean) => ({
@@ -395,7 +396,10 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 					messages: [{ role: "system", content: systemPrompt }, ...convertToMistralMessages(messages)] as any, // Type assertion to bypass type checking
 					temperature: this.options.modelTemperature ?? MISTRAL_DEFAULT_TEMPERATURE,
 					stream: true,
-				}
+				} as any // Type assertion to bypass type checking
+
+				// Add return_usage parameter (not in TypeScript definition but supported by API)
+				;(streamOptions as any).return_usage = true
 
 				// Create stream with abort handling
 				const stream = await this.client.chat.stream(streamOptions)
@@ -430,6 +434,29 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 						// Check for finish reason (completion signal)
 						if (chunk.data.choices[0].finishReason === "stop") {
 							this.logDebug("Received completion signal with finishReason: stop")
+
+							// Check for usage metrics in the final chunk
+							if (chunk.data.usage && !hasYieldedUsage) {
+								hasYieldedUsage = true
+								const inputTokens = chunk.data.usage.promptTokens || 0
+								const outputTokens = chunk.data.usage.completionTokens || 0
+
+								// Only log detailed metrics when debug is enabled
+								if (this.enableDebugOutput) {
+									const modelInfo = this.getModel().info
+									const totalCost = calculateApiCostOpenAI(modelInfo, inputTokens, outputTokens)
+									const timestamp = new Date().toISOString()
+									this.logDebug(
+										`[${timestamp}] Usage metrics - Input tokens: ${inputTokens}, Output tokens: ${outputTokens}, Cost: $${totalCost.toFixed(6)}`,
+									)
+								}
+								yield {
+									type: "usage",
+									inputTokens: inputTokens,
+									outputTokens: outputTokens,
+								}
+							}
+
 							// Yield an empty text chunk to signal completion
 							yield { type: "text", text: "" }
 							continue
@@ -454,9 +481,19 @@ export class MistralHandler extends BaseProvider implements SingleCompletionHand
 					// Handle usage metrics
 					if (chunk.data.usage && !hasYieldedUsage) {
 						hasYieldedUsage = true
-						this.logDebug(
-							`Usage metrics - Input tokens: ${chunk.data.usage.promptTokens}, Output tokens: ${chunk.data.usage.completionTokens}`,
-						)
+						const inputTokens = chunk.data.usage.promptTokens || 0
+						const outputTokens = chunk.data.usage.completionTokens || 0
+						const modelInfo = this.getModel().info
+						const totalCost = calculateApiCostOpenAI(modelInfo, inputTokens, outputTokens)
+
+						// Only log detailed metrics when debug is enabled
+						if (this.enableDebugOutput) {
+							const timestamp = new Date().toISOString()
+							this.logDebug(
+								`[${timestamp}] Usage metrics - Input tokens: ${inputTokens}, Output tokens: ${outputTokens}, Cost: $${totalCost.toFixed(6)}`,
+							)
+						}
+
 						yield {
 							type: "usage",
 							inputTokens: chunk.data.usage.promptTokens || 0,

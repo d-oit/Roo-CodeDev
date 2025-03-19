@@ -202,11 +202,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 			vscode.postMessage({ type: "alwaysAllowSubtasks", bool: alwaysAllowSubtasks })
 			vscode.postMessage({ type: "upsertApiConfiguration", text: currentApiConfigName, apiConfiguration })
 			vscode.postMessage({ type: "telemetrySetting", text: telemetrySetting })
-			vscode.postMessage({
-				type: "mistralModelStreamingEnabled",
-				bool: apiConfiguration?.mistralModelStreamingEnabled ?? true,
-			})
-			vscode.postMessage({ type: "stopToken", text: apiConfiguration?.stopToken ?? "" })
 			setChangeDetected(false)
 		}
 	}

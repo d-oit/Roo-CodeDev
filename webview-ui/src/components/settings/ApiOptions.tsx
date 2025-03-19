@@ -461,7 +461,8 @@ const ApiOptions = ({
 					</p>
 
 					{(apiConfiguration?.apiModelId?.startsWith("codestral-") ||
-						(!apiConfiguration?.apiModelId && mistralDefaultModelId.startsWith("codestral-"))) && (
+						(!apiConfiguration?.apiModelId && mistralDefaultModelId.startsWith("codestral-")) ||
+						selectedModelId?.startsWith("codestral-")) && (
 						<div>
 							<VSCodeTextField
 								value={apiConfiguration?.mistralCodestralUrl || ""}

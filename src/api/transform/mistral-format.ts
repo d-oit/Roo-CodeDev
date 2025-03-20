@@ -12,7 +12,6 @@ export type MistralMessage =
 
 export function convertToMistralMessages(anthropicMessages: Anthropic.Messages.MessageParam[]): MistralMessage[] {
 	const mistralMessages: MistralMessage[] = []
-
 	for (const anthropicMessage of anthropicMessages) {
 		if (typeof anthropicMessage.content === "string") {
 			mistralMessages.push({
@@ -21,45 +20,15 @@ export function convertToMistralMessages(anthropicMessages: Anthropic.Messages.M
 			})
 		} else {
 			if (anthropicMessage.role === "user") {
-				// Handle user messages with potential tool results
-				const { nonToolMessages, toolMessages } = anthropicMessage.content.reduce<{
-					nonToolMessages: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[]
-					toolMessages: Anthropic.ToolResultBlockParam[]
-				}>(
-					(acc, part) => {
-						if (part.type === "tool_result") {
-							acc.toolMessages.push(part)
-						} else if (part.type === "text" || part.type === "image") {
-							acc.nonToolMessages.push(part)
-						}
-						return acc
-					},
-					{ nonToolMessages: [], toolMessages: [] },
+				// Filter to only include text and image blocks
+				const textAndImageBlocks = anthropicMessage.content.filter(
+					(part) => part.type === "text" || part.type === "image",
 				)
 
-				// First add any tool results
-				for (const toolMsg of toolMessages) {
-					const content =
-						typeof toolMsg.content === "string"
-							? toolMsg.content
-							: toolMsg.content?.map((c) => (c.type === "text" ? c.text : "")).join("\n")
-
-					if (content) {
-						mistralMessages.push({
-							role: "tool",
-							content: JSON.stringify({
-								tool_use_id: toolMsg.tool_use_id,
-								content,
-							}),
-						})
-					}
-				}
-
-				// Then add the user message if there are non-tool messages
-				if (nonToolMessages.length > 0) {
+				if (textAndImageBlocks.length > 0) {
 					mistralMessages.push({
 						role: "user",
-						content: nonToolMessages.map((part) => {
+						content: textAndImageBlocks.map((part) => {
 							if (part.type === "image") {
 								return {
 									type: "image_url",
@@ -73,58 +42,15 @@ export function convertToMistralMessages(anthropicMessages: Anthropic.Messages.M
 					})
 				}
 			} else if (anthropicMessage.role === "assistant") {
-				// Handle assistant messages with potential tool uses
-				const { nonToolMessages, toolMessages } = anthropicMessage.content.reduce<{
-					nonToolMessages: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[]
-					toolMessages: Anthropic.ToolUseBlockParam[]
-				}>(
-					(acc, part) => {
-						if (part.type === "tool_use") {
-							acc.toolMessages.push(part)
-						} else if (part.type === "text" || part.type === "image") {
-							acc.nonToolMessages.push(part)
-						}
-						return acc
-					},
-					{ nonToolMessages: [], toolMessages: [] },
-				)
+				// Only process text blocks - assistant cannot send images or other content types in Mistral's API format
+				const textBlocks = anthropicMessage.content.filter((part) => part.type === "text")
 
-				// Convert text content
-				let textContent = nonToolMessages
-					.map((part) => {
-						if (part.type === "image") return ""
-						return part.text
-					})
-					.filter(Boolean)
-					.join("\n")
+				if (textBlocks.length > 0) {
+					const content = textBlocks.map((part) => part.text).join("\n")
 
-				// Add tool uses as structured content
-				if (toolMessages.length > 0) {
-					// If there's text content, add it first
-					if (textContent) {
-						mistralMessages.push({
-							role: "assistant",
-							content: textContent,
-						})
-					}
-
-					// Add each tool use as a separate message
-					for (const toolMsg of toolMessages) {
-						mistralMessages.push({
-							role: "assistant",
-							content: JSON.stringify({
-								type: "function",
-								name: toolMsg.name,
-								id: toolMsg.id,
-								input: toolMsg.input,
-							}),
-						})
-					}
-				} else if (textContent) {
-					// If no tools but we have text, add it
 					mistralMessages.push({
 						role: "assistant",
-						content: textContent,
+						content,
 					})
 				}
 			}

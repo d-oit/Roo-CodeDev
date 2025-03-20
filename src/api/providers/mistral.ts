@@ -83,24 +83,6 @@ const INITIAL_RETRY_DELAY = 1000 // Initial retry delay in milliseconds
 const MAX_RETRY_DELAY = 32000 // Maximum retry delay in milliseconds
 const JITTER_FACTOR = 0.2 // Jitter factor for randomization (20%)
 
-// Define default headers
-export const defaultHeaders = {
-	"HTTP-Referer": "https://github.com/RooVetGit/Roo-Cline",
-	"X-Title": "Roo Code",
-}
-
-interface TextContent {
-	type: "text"
-	text: string
-}
-
-interface ImageURLContent {
-	type: "image_url"
-	url: string
-}
-
-type MistralContent = string | (TextContent | ImageURLContent)[]
-
 interface MistralErrorResponse {
 	error: {
 		message: string

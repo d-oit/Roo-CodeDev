@@ -428,10 +428,9 @@ const ApiOptions = ({
 				<>
 					<VSCodeTextField
 						value={apiConfiguration?.mistralApiKey || ""}
-						style={{ width: "100%" }}
 						type="password"
 						onInput={handleInputChange("mistralApiKey")}
-						placeholder="Enter API Key..."
+						placeholder={t("settings:placeholders.apiKey")}
 						className="w-full">
 						<span className="font-medium">{t("settings:providers.mistralApiKey")}</span>
 					</VSCodeTextField>
@@ -443,7 +442,8 @@ const ApiOptions = ({
 							{t("settings:providers.getMistralApiKey")}
 						</VSCodeButtonLink>
 					)}
-					{shouldShowCodestralUrl() && (
+					{(apiConfiguration?.apiModelId?.startsWith("codestral-") ||
+						(!apiConfiguration?.apiModelId && mistralDefaultModelId.startsWith("codestral-"))) && (
 						<>
 							<VSCodeTextField
 								value={apiConfiguration?.mistralCodestralUrl || ""}
@@ -451,10 +451,12 @@ const ApiOptions = ({
 								onInput={handleInputChange("mistralCodestralUrl")}
 								placeholder="https://codestral.mistral.ai"
 								className="w-full">
-								<span className="font-medium">{t("settings:providers.codestralBaseUrl")}</span>
+								<label className="block font-medium mb-1">
+									{t("settings:providers.codestralBaseUrl")}
+								</label>
 							</VSCodeTextField>
 							<div className="text-sm text-vscode-descriptionForeground -mt-2">
-								<>{t("settings:providers.codestralBaseUrlDesc")}</>
+								{t("settings:providers.codestralBaseUrlDesc")}
 							</div>
 						</>
 					)}

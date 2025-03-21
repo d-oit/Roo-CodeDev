@@ -17,6 +17,7 @@ export type ApiProvider =
 	| "unbound"
 	| "requesty"
 	| "human-relay"
+	| "fake-ai"
 
 export interface ApiHandlerOptions {
 	apiModelId?: string
@@ -76,6 +77,7 @@ export interface ApiHandlerOptions {
 	modelTemperature?: number | null
 	modelMaxTokens?: number
 	modelMaxThinkingTokens?: number
+	fakeAi?: unknown
 }
 
 export type ApiConfiguration = ApiHandlerOptions & {
@@ -134,6 +136,7 @@ export const API_CONFIG_KEYS: GlobalStateKey[] = [
 	"modelTemperature",
 	"modelMaxTokens",
 	"modelMaxThinkingTokens",
+	"fakeAi",
 ]
 
 // Models
@@ -171,7 +174,7 @@ export const anthropicModels = {
 		thinking: true,
 	},
 	"claude-3-7-sonnet-20250219": {
-		maxTokens: 16_384,
+		maxTokens: 8192,
 		contextWindow: 200_000,
 		supportsImages: true,
 		supportsComputerUse: true,
@@ -664,7 +667,7 @@ export const vertexModels = {
 		thinking: true,
 	},
 	"claude-3-7-sonnet@20250219": {
-		maxTokens: 16_384,
+		maxTokens: 8192,
 		contextWindow: 200_000,
 		supportsImages: true,
 		supportsComputerUse: true,

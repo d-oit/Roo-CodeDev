@@ -14,7 +14,10 @@ type ContextManagementSettingsProps = HTMLAttributes<HTMLDivElement> & {
 	maxOpenTabsContext: number
 	maxWorkspaceFiles: number
 	showRooIgnoredFiles?: boolean
-	setCachedStateField: SetCachedStateField<"maxOpenTabsContext" | "maxWorkspaceFiles" | "showRooIgnoredFiles">
+	maxReadFileLine?: number
+	setCachedStateField: SetCachedStateField<
+		"maxOpenTabsContext" | "maxWorkspaceFiles" | "showRooIgnoredFiles" | "maxReadFileLine"
+	>
 }
 
 export const ContextManagementSettings = ({
@@ -22,6 +25,7 @@ export const ContextManagementSettings = ({
 	maxWorkspaceFiles,
 	showRooIgnoredFiles,
 	setCachedStateField,
+	maxReadFileLine,
 	className,
 	...props
 }: ContextManagementSettingsProps) => {
@@ -85,6 +89,32 @@ export const ContextManagementSettings = ({
 					</VSCodeCheckbox>
 					<div className="text-vscode-descriptionForeground text-sm mt-1">
 						{t("settings:contextManagement.rooignore.description")}
+					</div>
+				</div>
+
+				<div>
+					<div className="flex flex-col gap-2">
+						<span className="font-medium">{t("settings:contextManagement.maxReadFile.label")}</span>
+						<div className="flex items-center gap-2">
+							<input
+								type="number"
+								className="w-24 bg-vscode-input-background text-vscode-input-foreground border border-vscode-input-border px-2 py-1 rounded text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+								value={maxReadFileLine ?? 500}
+								min={0}
+								onChange={(e) => {
+									const newValue = parseInt(e.target.value, 10)
+									if (!isNaN(newValue) && newValue >= 0) {
+										setCachedStateField("maxReadFileLine", newValue)
+									}
+								}}
+								onClick={(e) => e.currentTarget.select()}
+								data-testid="max-read-file-line-input"
+							/>
+							<span>{t("settings:contextManagement.maxReadFile.lines")}</span>
+						</div>
+					</div>
+					<div className="text-vscode-descriptionForeground text-sm mt-2">
+						{t("settings:contextManagement.maxReadFile.description")}
 					</div>
 				</div>
 			</Section>

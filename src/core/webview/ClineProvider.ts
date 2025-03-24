@@ -35,7 +35,7 @@ import {
 import { HistoryItem } from "../../shared/HistoryItem"
 import { ApiConfigMeta, ExtensionMessage } from "../../shared/ExtensionMessage"
 import { checkoutDiffPayloadSchema, checkoutRestorePayloadSchema, WebviewMessage } from "../../shared/WebviewMessage"
-import { Mode, PromptComponent, defaultModeSlug, ModeConfig } from "../../shared/modes"
+import { Mode, PromptComponent, defaultModeSlug, ModeConfig, getModeBySlug, getGroupName } from "../../shared/modes"
 import { checkExistKey } from "../../shared/checkExistApiConfig"
 import { EXPERIMENT_IDS, experiments as Experiments, experimentDefault, ExperimentId } from "../../shared/experiments"
 import { formatLanguage } from "../../shared/language"
@@ -85,7 +85,7 @@ import { getWorkspacePath } from "../../utils/path"
  */
 
 export type ClineProviderEvents = {
-	clineAdded: [cline: Cline]
+	clineCreated: [cline: Cline]
 }
 
 export class ClineProvider extends EventEmitter<ClineProviderEvents> implements vscode.WebviewViewProvider {
@@ -143,8 +143,6 @@ export class ClineProvider extends EventEmitter<ClineProviderEvents> implements 
 
 		// Add this cline instance into the stack that represents the order of all the called tasks.
 		this.clineStack.push(cline)
-
-		this.emit("clineAdded", cline)
 
 		// Ensure getState() resolves correctly.
 		const state = await this.getState()
@@ -496,6 +494,7 @@ export class ClineProvider extends EventEmitter<ClineProviderEvents> implements 
 			rootTask: this.clineStack.length > 0 ? this.clineStack[0] : undefined,
 			parentTask,
 			taskNumber: this.clineStack.length + 1,
+			onCreated: (cline) => this.emit("clineCreated", cline),
 		})
 
 		await this.addClineToStack(cline)
@@ -561,6 +560,7 @@ export class ClineProvider extends EventEmitter<ClineProviderEvents> implements 
 			rootTask: historyItem.rootTask,
 			parentTask: historyItem.parentTask,
 			taskNumber: historyItem.number,
+			onCreated: (cline) => this.emit("clineCreated", cline),
 		})
 
 		await this.addClineToStack(cline)
@@ -2060,9 +2060,25 @@ export class ClineProvider extends EventEmitter<ClineProviderEvents> implements 
 
 			const rooIgnoreInstructions = this.getCurrentCline()?.rooIgnoreController?.getInstructions()
 
-			// Determine if browser tools can be used based on model support and user settings
-			const modelSupportsComputerUse = this.getCurrentCline()?.api.getModel().info.supportsComputerUse ?? false
-			const canUseBrowserTool = modelSupportsComputerUse && (browserToolEnabled ?? true)
+			// Determine if browser tools can be used based on model support, mode, and user settings
+			let modelSupportsComputerUse = false
+
+			// Create a temporary API handler to check if the model supports computer use
+			// This avoids relying on an active Cline instance which might not exist during preview
+			try {
+				const tempApiHandler = buildApiHandler(apiConfiguration)
+				modelSupportsComputerUse = tempApiHandler.getModel().info.supportsComputerUse ?? false
+			} catch (error) {
+				console.error("Error checking if model supports computer use:", error)
+			}
+
+			// Check if the current mode includes the browser tool group
+			const modeConfig = getModeBySlug(mode, customModes)
+			const modeSupportsBrowser = modeConfig?.groups.some((group) => getGroupName(group) === "browser") ?? false
+
+			// Only enable browser tools if the model supports it, the mode includes browser tools,
+			// and browser tools are enabled in settings
+			const canUseBrowserTool = modelSupportsComputerUse && modeSupportsBrowser && (browserToolEnabled ?? true)
 
 			const systemPrompt = await SYSTEM_PROMPT(
 				this.context,
@@ -2142,7 +2158,6 @@ export class ClineProvider extends EventEmitter<ClineProviderEvents> implements 
 				await this.configManager.setModeConfig(mode, config.id)
 			}
 		}
-
 		await this.contextProxy.setApiConfiguration(apiConfiguration)
 
 		if (this.getCurrentCline()) {

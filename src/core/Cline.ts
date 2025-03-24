@@ -115,6 +115,7 @@ export type ClineOptions = {
 	rootTask?: Cline
 	parentTask?: Cline
 	taskNumber?: number
+	onCreated?: (cline: Cline) => void
 }
 
 export class Cline extends EventEmitter<ClineEvents> {
@@ -192,6 +193,7 @@ export class Cline extends EventEmitter<ClineEvents> {
 		rootTask,
 		parentTask,
 		taskNumber,
+		onCreated,
 	}: ClineOptions) {
 		super()
 
@@ -234,6 +236,8 @@ export class Cline extends EventEmitter<ClineEvents> {
 			Experiments.isEnabled(experiments ?? {}, EXPERIMENT_IDS.DIFF_STRATEGY),
 			Experiments.isEnabled(experiments ?? {}, EXPERIMENT_IDS.MULTI_SEARCH_AND_REPLACE),
 		)
+
+		onCreated?.(this)
 
 		if (startTask) {
 			if (task || images) {
@@ -1229,7 +1233,16 @@ export class Cline extends EventEmitter<ClineEvents> {
 		} catch (error) {
 			// note that this api_req_failed ask is unique in that we only present this option if the api hasn't streamed any content yet (ie it fails on the first chunk due), as it would allow them to hit a retry button. However if the api failed mid-stream, it could be in any arbitrary state where some tools may have executed, so that error is handled differently and requires cancelling the task entirely.
 			if (alwaysApproveResubmit) {
-				const errorMsg = error.error?.metadata?.raw ?? error.message ?? "Unknown error"
+				let errorMsg
+
+				if (error.error?.metadata?.raw) {
+					errorMsg = JSON.stringify(error.error.metadata.raw, null, 2)
+				} else if (error.message) {
+					errorMsg = error.message
+				} else {
+					errorMsg = "Unknown error"
+				}
+
 				const baseDelay = requestDelaySeconds || 5
 				const exponentialDelay = Math.ceil(baseDelay * Math.pow(2, retryAttempt))
 				// Wait for the greater of the exponential delay or the rate limit delay

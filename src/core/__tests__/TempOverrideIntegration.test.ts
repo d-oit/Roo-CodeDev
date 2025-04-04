@@ -102,11 +102,13 @@ describe("Temperature Override Integration", () => {
 		// Mock console.error to reduce test noise
 		jest.spyOn(console, "error").mockImplementation(() => {})
 
-		// Create mock API with options property
+		// Create mock API with options property and required methods
 		mockApi = {
 			options: {
 				modelTemperature: defaultTemp,
 			},
+			getModel: jest.fn().mockReturnValue("test-model"),
+			setTemperature: jest.fn(),
 		}
 
 		cline = new Cline({
@@ -151,6 +153,8 @@ describe("Temperature Override Integration", () => {
 
 			expect(cline.apiConfiguration.modelTemperature).toBe(defaultTemp)
 			expect(userContent[0].text).toBe("@customTemperature:0.9 Do something")
+			expect(mockApi.getModel).toHaveBeenCalled()
+			expect(mockApi.setTemperature).not.toHaveBeenCalled()
 		})
 
 		it("should apply temperature override when enabled", async () => {
@@ -167,6 +171,8 @@ describe("Temperature Override Integration", () => {
 			expect(cline.apiConfiguration.modelTemperature).toBe(0.9) // Should be set to the override value
 			expect(userContent[0].text).toBe(" Do something") // Should preserve leading space like real service
 			expect(mockGetConfig).toHaveBeenCalledWith("enableTemperatureOverride", true)
+			expect(mockApi.getModel).toHaveBeenCalled()
+			expect(mockApi.setTemperature).toHaveBeenCalledWith(0.9)
 		})
 
 		it("should handle invalid temperature override gracefully", async () => {

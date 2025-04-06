@@ -35,10 +35,30 @@ export class TerminalRegistry {
 						terminalInfo.running = true
 						terminalInfo.setActiveStream(stream)
 					} else {
-						console.error(
-							"[TerminalRegistry] Shell execution started, but not from a Roo-registered terminal:",
-							e,
-						)
+						// Try to auto-register the terminal if it's not already registered
+						try {
+							const newTerminalInfo = this.registerTerminal(e.terminal)
+							if (newTerminalInfo) {
+								console.info(
+									"[TerminalRegistry] Auto-registered terminal for shell execution:",
+									newTerminalInfo.id,
+								)
+								newTerminalInfo.running = true
+								newTerminalInfo.setActiveStream(stream)
+							} else {
+								console.error(
+									"[TerminalRegistry] Shell execution started, but failed to auto-register terminal:",
+									e,
+								)
+							}
+						} catch (error) {
+							console.error(
+								"[TerminalRegistry] Shell execution started, but not from a Roo-registered terminal:",
+								e,
+								"Error during auto-registration:",
+								error,
+							)
+						}
 					}
 				},
 			)
@@ -328,5 +348,29 @@ export class TerminalRegistry {
 		terminal.taskId = taskId
 
 		return terminal
+	}
+
+	/**
+	 * Registers an existing VSCode terminal with the registry
+	 * @param terminal The VSCode terminal to register
+	 * @returns The newly created Terminal object, or undefined if registration failed
+	 */
+	static registerTerminal(terminal: vscode.Terminal): Terminal | undefined {
+		try {
+			// Use the terminal's name as a hint for the working directory
+			// This is a fallback since we don't have direct access to the terminal's CWD
+			const cwd = terminal.name || "Roo Code"
+
+			// Create a new Terminal instance
+			const newTerminal = new Terminal(this.nextTerminalId++, terminal, cwd)
+
+			// Add to registry
+			this.terminals.push(newTerminal)
+
+			return newTerminal
+		} catch (error) {
+			console.error("[TerminalRegistry] Failed to register terminal:", error)
+			return undefined
+		}
 	}
 }

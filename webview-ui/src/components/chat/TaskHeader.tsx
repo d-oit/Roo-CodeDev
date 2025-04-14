@@ -122,7 +122,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	}, [task.text, windowWidth])
 
 	const isCostAvailable = useMemo(() => {
-		return totalCost > 0
+		return totalCost !== null && totalCost !== undefined && totalCost > 0 && !isNaN(totalCost)
 	}, [totalCost])
 
 	const shouldShowPromptCacheInfo = doesModelSupportPromptCache && apiConfiguration?.apiProvider !== "openrouter"

@@ -121,6 +121,8 @@
 		"getDeepSeekApiKey": "Lấy khóa API DeepSeek",
 		"geminiApiKey": "Khóa API Gemini",
 		"getGeminiApiKey": "Lấy khóa API Gemini",
+		"useFreeTier": "Sử dụng bậc miễn phí",
+		"useFreeTierDescription": "Đặt giá đầu vào và đầu ra thành 0 cho mục đích tính toán chi phí.",
 		"openAiApiKey": "Khóa API OpenAI",
 		"openAiBaseUrl": "URL cơ sở",
 		"getOpenAiApiKey": "Lấy khóa API OpenAI",

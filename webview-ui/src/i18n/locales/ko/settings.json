@@ -122,6 +122,8 @@
 		"getDeepSeekApiKey": "DeepSeek API 키 받기",
 		"geminiApiKey": "Gemini API 키",
 		"getGeminiApiKey": "Gemini API 키 받기",
+		"useFreeTier": "무료 등급 사용",
+		"useFreeTierDescription": "비용 계산 목적으로 입력 및 출력 가격을 0으로 설정합니다.",
 		"openAiApiKey": "OpenAI API 키",
 		"openAiBaseUrl": "기본 URL",
 		"getOpenAiApiKey": "OpenAI API 키 받기",

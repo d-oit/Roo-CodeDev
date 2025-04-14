@@ -122,6 +122,8 @@
 		"getDeepSeekApiKey": "DeepSeek API-Schlüssel erhalten",
 		"geminiApiKey": "Gemini API-Schlüssel",
 		"getGeminiApiKey": "Gemini API-Schlüssel erhalten",
+		"useFreeTier": "Kostenlose Stufe nutzen",
+		"useFreeTierDescription": "Setzt Eingabe- und Ausgabepreise für Kostenzwecke auf null.",
 		"openAiApiKey": "OpenAI API-Schlüssel",
 		"openAiBaseUrl": "Basis-URL",
 		"getOpenAiApiKey": "OpenAI API-Schlüssel erhalten",

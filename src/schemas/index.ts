@@ -377,6 +377,7 @@ export const providerSettingsSchema = z.object({
 	// Gemini
 	geminiApiKey: z.string().optional(),
 	googleGeminiBaseUrl: z.string().optional(),
+	geminiFreeTier: z.boolean().optional(),
 	// OpenAI Native
 	openAiNativeApiKey: z.string().optional(),
 	// Mistral
@@ -466,6 +467,7 @@ const providerSettingsRecord: ProviderSettingsRecord = {
 	// Gemini
 	geminiApiKey: undefined,
 	googleGeminiBaseUrl: undefined,
+	geminiFreeTier: undefined,
 	// OpenAI Native
 	openAiNativeApiKey: undefined,
 	// Mistral
@@ -494,7 +496,7 @@ const providerSettingsRecord: ProviderSettingsRecord = {
 	fakeAi: undefined,
 }
 
-export const PROVIDER_SETTINGS_KEYS = Object.keys(providerSettingsRecord) as Keys<ProviderSettings>[]
+export const PROVIDER_SETTINGS_KEYS = Object.keys(providerSettingsRecord) as (keyof ProviderSettings)[]
 
 /**
  * GlobalSettings

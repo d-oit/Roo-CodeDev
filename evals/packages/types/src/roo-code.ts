@@ -357,6 +357,8 @@ export const providerSettingsSchema = z.object({
 	lmStudioSpeculativeDecodingEnabled: z.boolean().optional(),
 	// Gemini
 	geminiApiKey: z.string().optional(),
+	// geminiFreeTier: z.boolean().optional(), // Moved to globalSettingsSchema
+	geminiModelInfo: modelInfoSchema.optional(), // Keep this uncommented
 	googleGeminiBaseUrl: z.string().optional(),
 	// OpenAI Native
 	openAiNativeApiKey: z.string().optional(),
@@ -444,6 +446,8 @@ const providerSettingsRecord: ProviderSettingsRecord = {
 	lmStudioSpeculativeDecodingEnabled: undefined,
 	// Gemini
 	geminiApiKey: undefined,
+	// geminiFreeTier: undefined, // Moved to globalSettingsRecord
+	geminiModelInfo: undefined, // Keep this uncommented
 	googleGeminiBaseUrl: undefined,
 	// OpenAI Native
 	openAiNativeApiKey: undefined,
@@ -538,6 +542,7 @@ export const globalSettingsSchema = z.object({
 	language: languagesSchema.optional(),
 
 	telemetrySetting: telemetrySettingsSchema.optional(),
+	geminiFreeTier: z.boolean().optional(), // Added Gemini Free Tier setting
 
 	mcpEnabled: z.boolean().optional(),
 	enableMcpServerCreation: z.boolean().optional(),
@@ -613,6 +618,7 @@ const globalSettingsRecord: GlobalSettingsRecord = {
 	language: undefined,
 
 	telemetrySetting: undefined,
+	geminiFreeTier: undefined, // Added Gemini Free Tier setting
 
 	mcpEnabled: undefined,
 	enableMcpServerCreation: undefined,

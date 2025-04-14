@@ -122,6 +122,8 @@
 		"getDeepSeekApiKey": "获取 DeepSeek API 密钥",
 		"geminiApiKey": "Gemini API 密钥",
 		"getGeminiApiKey": "获取 Gemini API 密钥",
+		"useFreeTier": "使用免费层级",
+		"useFreeTierDescription": "将输入和输出价格设置为零以用于成本计算。",
 		"openAiApiKey": "OpenAI API 密钥",
 		"openAiBaseUrl": "OpenAI 基础 URL",
 		"getOpenAiApiKey": "获取 OpenAI API 密钥",

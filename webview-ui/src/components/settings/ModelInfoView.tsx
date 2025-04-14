@@ -5,7 +5,7 @@ import { useAppTranslation } from "@/i18n/TranslationContext"
 import { formatPrice } from "@/utils/formatPrice"
 import { cn } from "@/lib/utils"
 
-import { ModelInfo, geminiModels } from "../../../../src/shared/api"
+import { ModelInfo, geminiModels, ApiConfiguration } from "../../../../src/shared/api" // Added ApiConfiguration import
 
 import { ModelDescriptionMarkdown } from "./ModelDescriptionMarkdown"
 
@@ -14,6 +14,7 @@ type ModelInfoViewProps = {
 	modelInfo: ModelInfo
 	isDescriptionExpanded: boolean
 	setIsDescriptionExpanded: (isExpanded: boolean) => void
+	apiConfiguration?: ApiConfiguration // Added optional apiConfiguration prop
 }
 
 export const ModelInfoView = ({
@@ -21,9 +22,12 @@ export const ModelInfoView = ({
 	modelInfo,
 	isDescriptionExpanded,
 	setIsDescriptionExpanded,
+	apiConfiguration, // Destructure the new prop
 }: ModelInfoViewProps) => {
 	const { t } = useAppTranslation()
 	const isGemini = useMemo(() => Object.keys(geminiModels).includes(selectedModelId), [selectedModelId])
+	// Determine if Gemini free tier is active
+	const isGeminiFreeTier = apiConfiguration?.apiProvider === "gemini" && apiConfiguration?.geminiFreeTier === true
 
 	const infoItems = [
 		<ModelInfoSupportsItem
@@ -49,16 +53,18 @@ export const ModelInfoView = ({
 				{modelInfo.maxTokens?.toLocaleString()} tokens
 			</>
 		),
-		modelInfo.inputPrice !== undefined && modelInfo.inputPrice > 0 && (
+		// Display input price (show $0 if free tier is active)
+		modelInfo.inputPrice !== undefined && (
 			<>
 				<span className="font-medium">{t("settings:modelInfo.inputPrice")}:</span>{" "}
-				{formatPrice(modelInfo.inputPrice)} / 1M tokens
+				{formatPrice(isGeminiFreeTier ? 0 : modelInfo.inputPrice)} / 1M tokens
 			</>
 		),
-		modelInfo.outputPrice !== undefined && modelInfo.outputPrice > 0 && (
+		// Display output price (show $0 if free tier is active)
+		modelInfo.outputPrice !== undefined && (
 			<>
 				<span className="font-medium">{t("settings:modelInfo.outputPrice")}:</span>{" "}
-				{formatPrice(modelInfo.outputPrice)} / 1M tokens
+				{formatPrice(isGeminiFreeTier ? 0 : modelInfo.outputPrice)} / 1M tokens
 			</>
 		),
 		modelInfo.supportsPromptCache && modelInfo.cacheReadsPrice && (

@@ -77,7 +77,6 @@ const ApiOptions = ({
 	setErrorMessage,
 }: ApiOptionsProps) => {
 	const { t } = useAppTranslation()
-
 	const [ollamaModels, setOllamaModels] = useState<string[]>([])
 	const [lmStudioModels, setLmStudioModels] = useState<string[]>([])
 	const [vsCodeLmModels, setVsCodeLmModels] = useState<LanguageModelChatSelector[]>([])
@@ -766,6 +765,19 @@ const ApiOptions = ({
 								className="w-full mt-1"
 							/>
 						)}
+					</div>
+					<div>
+						<Checkbox
+							checked={apiConfiguration?.geminiFreeTier ?? false} // Use apiConfiguration state
+							onChange={(checked: boolean) => {
+								setApiConfigurationField("geminiFreeTier", checked)
+							}}>
+							{t("settings:providers.useFreeTier")}
+						</Checkbox>
+						{/* Keep description separate as in original */}
+						<div className="text-sm text-vscode-descriptionForeground ml-6">
+							{t("settings:providers.useFreeTierDescription")}
+						</div>
 					</div>
 				</>
 			)}
@@ -1669,6 +1681,7 @@ const ApiOptions = ({
 						modelInfo={selectedModelInfo}
 						isDescriptionExpanded={isDescriptionExpanded}
 						setIsDescriptionExpanded={setIsDescriptionExpanded}
+						apiConfiguration={apiConfiguration} // Pass the config down
 					/>
 					<ThinkingBudget
 						key={`${selectedProvider}-${selectedModelId}`}

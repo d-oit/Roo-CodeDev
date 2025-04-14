@@ -122,6 +122,8 @@
 		"getDeepSeekApiKey": "DeepSeek API Anahtarı Al",
 		"geminiApiKey": "Gemini API Anahtarı",
 		"getGeminiApiKey": "Gemini API Anahtarı Al",
+		"useFreeTier": "Ücretsiz katmanı kullan",
+		"useFreeTierDescription": "Maliyet hesaplama amacıyla giriş ve çıkış fiyatlarını sıfıra ayarlar.",
 		"openAiApiKey": "OpenAI API Anahtarı",
 		"openAiBaseUrl": "Temel URL",
 		"getOpenAiApiKey": "OpenAI API Anahtarı Al",

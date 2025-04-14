@@ -1820,15 +1820,18 @@ export class Cline extends EventEmitter<ClineEvents> {
 					tokensOut: outputTokens,
 					cacheWrites: cacheWriteTokens,
 					cacheReads: cacheReadTokens,
+					// Check for Gemini free tier before calculating cost
 					cost:
-						totalCost ??
-						calculateApiCostAnthropic(
-							this.api.getModel().info,
-							inputTokens,
-							outputTokens,
-							cacheWriteTokens,
-							cacheReadTokens,
-						),
+						this.apiConfiguration.apiProvider === "gemini" && this.apiConfiguration.geminiFreeTier === true
+							? 0
+							: (totalCost ??
+								calculateApiCostAnthropic(
+									this.api.getModel().info,
+									inputTokens,
+									outputTokens,
+									cacheWriteTokens,
+									cacheReadTokens,
+								)),
 					cancelReason,
 					streamingFailedMessage,
 				} satisfies ClineApiReqInfo)

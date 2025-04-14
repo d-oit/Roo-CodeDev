@@ -645,6 +645,10 @@ export const webviewMessageHandler = async (provider: ClineProvider, message: We
 			await updateGlobalState("diffEnabled", diffEnabled)
 			await provider.postStateToWebview()
 			break
+		// case "geminiFreeTier": // Removed - Now part of apiConfiguration
+		// 	await provider.setValue("geminiFreeTier", message.bool ?? false) // Use provider.setValue
+		// 	await provider.postStateToWebview()
+		// 	break
 		case "showGreeting":
 			const showGreeting = message.bool ?? true
 			await updateGlobalState("showGreeting", showGreeting)

@@ -122,6 +122,8 @@
 		"getDeepSeekApiKey": "DeepSeek API कुंजी प्राप्त करें",
 		"geminiApiKey": "Gemini API कुंजी",
 		"getGeminiApiKey": "Gemini API कुंजी प्राप्त करें",
+		"useFreeTier": "मुफ़्त टियर का उपयोग करें",
+		"useFreeTierDescription": "लागत गणना उद्देश्यों के लिए इनपुट और आउटपुट कीमतों को शून्य पर सेट करता है।",
 		"openAiApiKey": "OpenAI API कुंजी",
 		"openAiBaseUrl": "बेस URL",
 		"getOpenAiApiKey": "OpenAI API कुंजी प्राप्त करें",

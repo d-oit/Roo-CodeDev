@@ -122,6 +122,8 @@
 		"getDeepSeekApiKey": "Obtener clave API de DeepSeek",
 		"geminiApiKey": "Clave API de Gemini",
 		"getGeminiApiKey": "Obtener clave API de Gemini",
+		"useFreeTier": "Usar nivel gratuito",
+		"useFreeTierDescription": "Establece los precios de entrada y salida a cero para fines de cálculo de costos.",
 		"openAiApiKey": "Clave API de OpenAI",
 		"openAiBaseUrl": "URL base",
 		"getOpenAiApiKey": "Obtener clave API de OpenAI",

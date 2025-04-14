@@ -122,6 +122,8 @@
 		"getDeepSeekApiKey": "DeepSeek APIキーを取得",
 		"geminiApiKey": "Gemini APIキー",
 		"getGeminiApiKey": "Gemini APIキーを取得",
+		"useFreeTier": "無料枠を使用",
+		"useFreeTierDescription": "コスト計算のために入力および出力価格をゼロに設定します。",
 		"openAiApiKey": "OpenAI APIキー",
 		"openAiBaseUrl": "ベースURL",
 		"getOpenAiApiKey": "OpenAI APIキーを取得",

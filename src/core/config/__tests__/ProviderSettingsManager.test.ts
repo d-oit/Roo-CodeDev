@@ -300,6 +300,61 @@ describe("ProviderSettingsManager", () => {
 				"Failed to save config: Error: Failed to write provider profiles to secrets: Error: Storage failed",
 			)
 		})
+
+		it("should save boolean values correctly, even when true", async () => {
+			// Create a clean initial state
+			const initialState = {
+				currentApiConfigName: "default",
+				apiConfigs: {
+					default: { id: "default-id" },
+				},
+				modeApiConfigs: {
+					code: "default",
+					architect: "default",
+					ask: "default",
+				},
+				migrations: {
+					rateLimitSecondsMigrated: true,
+				},
+			}
+
+			// Mock the initial state
+			mockSecrets.get.mockResolvedValueOnce(JSON.stringify(initialState))
+
+			// Create a config with geminiFreeTier set to true
+			const configWithTrueBoolean: ProviderSettings = {
+				apiProvider: "gemini",
+				geminiFreeTier: true,
+			}
+
+			// Save the config
+			await providerSettingsManager.saveConfig("test", configWithTrueBoolean)
+
+			// Verify store was called
+			expect(mockSecrets.store).toHaveBeenCalled()
+
+			// Get what was stored
+			const storeCall = mockSecrets.store.mock.calls[0]
+			expect(storeCall[0]).toBe("roo_cline_config_api_config")
+
+			const storedData = JSON.parse(storeCall[1])
+
+			// Verify the structure
+			expect(storedData).toHaveProperty("apiConfigs.test")
+			expect(storedData.apiConfigs.test).toHaveProperty("apiProvider", "gemini")
+			expect(storedData.apiConfigs.test).toHaveProperty("geminiFreeTier", true)
+
+			// Now test loading the config
+			mockSecrets.get.mockReset()
+			mockSecrets.get.mockResolvedValueOnce(JSON.stringify(storedData))
+
+			// Load the config
+			const loadedConfig = await providerSettingsManager.loadConfig("test")
+
+			// Verify the loaded config
+			expect(loadedConfig).toHaveProperty("apiProvider", "gemini")
+			expect(loadedConfig).toHaveProperty("geminiFreeTier", true)
+		})
 	})
 
 	describe("DeleteConfig", () => {

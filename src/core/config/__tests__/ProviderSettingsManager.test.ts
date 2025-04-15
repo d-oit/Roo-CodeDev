@@ -318,14 +318,18 @@ describe("ProviderSettingsManager", () => {
 				},
 			}
 
-			// Mock the initial state
-			mockSecrets.get.mockResolvedValueOnce(JSON.stringify(initialState))
+			// Mock the initial state - use mockResolvedValue instead of mockResolvedValueOnce
+			// to ensure it returns the same value for all calls during the test
+			mockSecrets.get.mockResolvedValue(JSON.stringify(initialState))
 
 			// Create a config with geminiFreeTier set to true
 			const configWithTrueBoolean: ProviderSettings = {
 				apiProvider: "gemini",
 				geminiFreeTier: true,
 			}
+
+			// Clear any previous store calls
+			mockSecrets.store.mockClear()
 
 			// Save the config
 			await providerSettingsManager.saveConfig("test", configWithTrueBoolean)

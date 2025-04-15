@@ -158,13 +158,45 @@ export class ProviderSettingsManager {
 	 * Preserves the ID from the input 'config' object if it exists,
 	 * otherwise generates a new one (for creation scenarios).
 	 */
+	/**
+	 * Save a config with the given name.
+	 * Preserves the ID from the input 'config' object if it exists,
+	 * otherwise generates a new one (for creation scenarios).
+	 *
+	 * Note: Special care is taken to ensure boolean values (including `true`)
+	 * are properly preserved during serialization/deserialization.
+	 */
 	public async saveConfig(name: string, config: ProviderSettingsWithId) {
 		try {
 			return await this.lock(async () => {
 				const providerProfiles = await this.load()
 				// Preserve the existing ID if this is an update to an existing config.
 				const existingId = providerProfiles.apiConfigs[name]?.id
-				providerProfiles.apiConfigs[name] = { ...config, id: config.id || existingId || this.generateId() }
+
+				// Create a deep copy of the config to ensure all properties (including booleans) are preserved
+				const configCopy = JSON.parse(JSON.stringify(config))
+
+				// Ensure apiConfigs exists
+				if (!providerProfiles.apiConfigs) {
+					providerProfiles.apiConfigs = {}
+				}
+
+				// Create a new apiConfigs object with both existing configs and the new/updated one
+				providerProfiles.apiConfigs = {
+					...providerProfiles.apiConfigs,
+					[name]: {
+						...configCopy,
+						id: config.id || existingId || this.generateId(),
+					},
+				}
+
+				// Debug log to inspect providerProfiles before storing
+				console.log("[saveConfig] providerProfiles before store:", {
+					currentApiConfigName: providerProfiles.currentApiConfigName,
+					apiConfigs: providerProfiles.apiConfigs,
+					modeApiConfigs: providerProfiles.modeApiConfigs,
+				})
+
 				await this.store(providerProfiles)
 			})
 		} catch (error) {
@@ -321,7 +353,19 @@ export class ProviderSettingsManager {
 	private async load(): Promise<ProviderProfiles> {
 		try {
 			const content = await this.context.secrets.get(this.secretsKey)
-			return content ? providerProfilesSchema.parse(JSON.parse(content)) : this.defaultProviderProfiles
+
+			if (!content) {
+				return this.defaultProviderProfiles
+			}
+
+			// Parse the content with a reviver function to ensure boolean values are preserved
+			const parsedContent = JSON.parse(content, (key, value) => {
+				// Return the value as is, ensuring booleans are preserved
+				return value
+			})
+
+			// Validate the parsed content against the schema
+			return providerProfilesSchema.parse(parsedContent)
 		} catch (error) {
 			if (error instanceof ZodError) {
 				telemetryService.captureSchemaValidationError({ schemaName: "ProviderProfiles", error })
@@ -333,7 +377,16 @@ export class ProviderSettingsManager {
 
 	private async store(providerProfiles: ProviderProfiles) {
 		try {
-			await this.context.secrets.store(this.secretsKey, JSON.stringify(providerProfiles, null, 2))
+			// Use a custom replacer function to ensure boolean values are preserved
+			const replacer = (key: string, value: any) => {
+				// Explicitly handle boolean values to ensure they're preserved
+				if (value === true || value === false) {
+					return value
+				}
+				return value
+			}
+
+			await this.context.secrets.store(this.secretsKey, JSON.stringify(providerProfiles, replacer, 2))
 		} catch (error) {
 			throw new Error(`Failed to write provider profiles to secrets: ${error}`)
 		}

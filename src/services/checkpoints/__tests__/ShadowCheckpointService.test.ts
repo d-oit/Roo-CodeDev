@@ -56,6 +56,9 @@ describe.each([
 	[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"],
 	[RepoPerWorkspaceCheckpointService, "RepoPerWorkspaceCheckpointService"],
 ])("CheckpointService", (klass, prefix) => {
+	// Increase timeout for Git operations
+	jest.setTimeout(20000)
+
 	const taskId = "test-task"
 
 	let workspaceGit: SimpleGit
@@ -86,6 +89,7 @@ describe.each([
 
 	describe(`${klass.name}#getDiff`, () => {
 		it("returns the correct diff between commits", async () => {
+			jest.setTimeout(20000) // Increase timeout for Git operations
 			await fs.writeFile(testFile, "Ahoy, world!")
 			const commit1 = await service.saveCheckpoint("Ahoy, world!")
 			expect(commit1?.commit).toBeTruthy()

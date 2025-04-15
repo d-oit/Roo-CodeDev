@@ -15,7 +15,7 @@ jest.mock("@/utils/vscode", () => ({
 }))
 
 // Mock the ExtensionStateContext
-jest.mock("../../context/ExtensionStateContext", () => ({
+jest.mock("../../../context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({
 		apiConfiguration: {
 			apiProvider: "anthropic",

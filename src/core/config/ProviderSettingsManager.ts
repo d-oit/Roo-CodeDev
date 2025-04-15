@@ -359,13 +359,100 @@ export class ProviderSettingsManager {
 				return value
 			})
 
-			// Validate the parsed content against the schema
-			return providerProfilesSchema.parse(parsedContent)
-		} catch (error) {
-			if (error instanceof ZodError) {
-				telemetryService.captureSchemaValidationError({ schemaName: "ProviderProfiles", error })
-			}
+			// Validate the parsed content using safeParse to allow for recovery
+			const validationResult = providerProfilesSchema.safeParse(parsedContent)
 
+			if (validationResult.success) {
+				return validationResult.data
+			} else {
+				// Validation failed, attempt recovery if errors are only in apiConfigs
+				const zodError = validationResult.error
+				telemetryService.captureSchemaValidationError({ schemaName: "ProviderProfiles", error: zodError })
+
+				const nonApiConfigErrors = zodError.issues.filter((issue) => issue.path[0] !== "apiConfigs")
+
+				if (nonApiConfigErrors.length === 0 && parsedContent.apiConfigs) {
+					// Errors are only within apiConfigs, attempt filtering
+					try {
+						console.warn(
+							"ProviderSettingsManager: Invalid entries found in apiConfigs during load. Attempting to filter and recover.",
+							JSON.stringify(
+								zodError.issues.filter((issue) => issue.path[0] === "apiConfigs"),
+								null,
+								2,
+							),
+						)
+
+						const filteredApiConfigs: Record<string, ProviderSettingsWithId> = {}
+						for (const [name, config] of Object.entries(parsedContent.apiConfigs)) {
+							// Explicitly check if config is a valid object before parsing
+							if (typeof config !== "object" || config === null) {
+								console.warn(
+									`ProviderSettingsManager: Skipping invalid profile '${name}' during load: Expected object, received ${typeof config}.`,
+								)
+								continue // Skip this entry entirely
+							}
+							// Now safeParse the object
+							const profileValidation = providerSettingsWithIdSchema.safeParse(config)
+							if (profileValidation.success) {
+								filteredApiConfigs[name] = profileValidation.data
+							} else {
+								console.warn(
+									`ProviderSettingsManager: Removing invalid profile '${name}' during load. Issues:`,
+									JSON.stringify(profileValidation.error.issues, null, 2),
+								)
+							}
+						}
+
+						// Ensure the currentApiConfigName still points to a valid config if possible
+						let currentApiConfigName = parsedContent.currentApiConfigName
+						// Check if the original current name exists AND is valid after filtering
+						if (!filteredApiConfigs[currentApiConfigName]) {
+							const originalName = parsedContent.currentApiConfigName
+							const availableNames = Object.keys(filteredApiConfigs)
+							// Fallback logic: try 'default', then first available, then manager's default
+							currentApiConfigName = availableNames.includes("default")
+								? "default"
+								: availableNames[0] || this.defaultProviderProfiles.currentApiConfigName
+
+							if (originalName && originalName !== currentApiConfigName) {
+								console.warn(
+									`ProviderSettingsManager: Current API config '${originalName}' was invalid or removed. Switched to '${currentApiConfigName}'.`,
+								)
+							} else if (!originalName) {
+								console.warn(
+									`ProviderSettingsManager: Original currentApiConfigName was missing or invalid. Switched to '${currentApiConfigName}'.`,
+								)
+							}
+							// Persisting this change immediately might be better, but requires storing here.
+							// Let's defer persistence to the next save/store operation for simplicity.
+						}
+
+						// Return a recovered object
+						return {
+							currentApiConfigName: currentApiConfigName,
+							apiConfigs: filteredApiConfigs,
+							modeApiConfigs: parsedContent.modeApiConfigs || this.defaultModeApiConfigs,
+							migrations: parsedContent.migrations || this.defaultProviderProfiles.migrations,
+						}
+					} catch (recoveryError) {
+						console.error("ProviderSettingsManager: Error occurred during recovery logic:", recoveryError)
+						// Re-throw the recovery error to be caught by the outer catch block
+						throw recoveryError // Ensures it's caught by the final catch
+					}
+				} else {
+					// Errors exist outside apiConfigs or apiConfigs is missing, cannot recover safely
+					console.error(
+						"ProviderSettingsManager: Unrecoverable Zod validation failed during load. Issues:",
+						JSON.stringify(zodError.issues, null, 2),
+					)
+					// Throw a specific error for unrecoverable Zod issues
+					throw new Error(`Unrecoverable validation errors in provider profiles structure: ${zodError}`)
+				}
+			}
+		} catch (error) {
+			// Catch non-Zod errors or errors during recovery logic
+			console.error("ProviderSettingsManager: Error during load or recovery:", error)
 			throw new Error(`Failed to read provider profiles from secrets: ${error}`)
 		}
 	}

@@ -1,11 +1,7 @@
 import React from "react"
 import { render, screen } from "@testing-library/react"
 import TaskHeader from "../TaskHeader"
-
-// Mock the translation function
-jest.mock("react-i18next", () => ({
-	useTranslation: () => ({ t: (key: string) => key }),
-}))
+import { ApiConfiguration } from "../../../../../src/shared/api"
 
 // Mock the vscode API
 jest.mock("@/utils/vscode", () => ({
@@ -19,7 +15,9 @@ jest.mock("../../../context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({
 		apiConfiguration: {
 			apiProvider: "anthropic",
-		},
+			apiKey: "test-api-key", // Add relevant fields
+			apiModelId: "claude-3-opus-20240229", // Add relevant fields
+		} as ApiConfiguration, // Optional: Add type assertion if ApiConfiguration is imported
 		currentTaskItem: null,
 	}),
 }))

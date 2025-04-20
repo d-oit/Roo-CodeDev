@@ -28,6 +28,8 @@ interface TaskHeaderProps {
 	cacheReads?: number
 	totalCost: number
 	contextTokens: number
+	thoughtsTokenCount?: number
+	thinkingBudget?: number
 	onClose: () => void
 }
 
@@ -40,6 +42,8 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	cacheReads,
 	totalCost,
 	contextTokens,
+	thoughtsTokenCount,
+	thinkingBudget,
 	onClose,
 }) => {
 	const { t } = useTranslation()
@@ -145,6 +149,13 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 										<i className="codicon codicon-arrow-down text-xs font-bold -mb-0.5" />
 										{formatLargeNumber(tokensOut || 0)}
 									</span>
+									{thoughtsTokenCount !== undefined && thinkingBudget !== undefined && (
+										<span className="flex items-center gap-[3px]" data-testid="thinking-metrics">
+											<i className="codicon codicon-lightbulb text-xs font-bold -mb-0.5" />
+											{formatLargeNumber(thoughtsTokenCount ?? 0)}/
+											{formatLargeNumber(thinkingBudget ?? 0)}
+										</span>
+									)}
 								</div>
 								{!totalCost && <TaskActions item={currentTaskItem} />}
 							</div>

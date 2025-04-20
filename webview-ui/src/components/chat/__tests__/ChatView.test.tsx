@@ -1,5 +1,5 @@
 import React from "react"
-import { render, waitFor, act } from "@testing-library/react"
+import { render, waitFor, act, screen } from "@testing-library/react"
 import ChatView from "../ChatView"
 import { ExtensionStateContextProvider } from "../../../context/ExtensionStateContext"
 import { vscode } from "../../../utils/vscode"
@@ -42,7 +42,17 @@ jest.mock("../BrowserSessionRow", () => ({
 jest.mock("../ChatRow", () => ({
 	__esModule: true,
 	default: function MockChatRow({ message }: { message: ClineMessage }) {
-		return <div data-testid="chat-row">{JSON.stringify(message)}</div>
+		const textContent = message.text ? JSON.parse(message.text) : {}
+		return (
+			<div data-testid="chat-row">
+				{textContent.thoughtsTokenCount && (
+					<div data-testid="thinking-tokens">
+						{textContent.thoughtsTokenCount}/{textContent.thinkingBudget}
+					</div>
+				)}
+				{JSON.stringify(message)}
+			</div>
+		)
 	},
 }))
 
@@ -78,7 +88,13 @@ jest.mock("../ChatTextArea", () => {
 
 			return (
 				<div data-testid="chat-textarea">
-					<input ref={mockInputRef} type="text" onChange={(e) => props.onSend(e.target.value)} />
+					<input
+						ref={mockInputRef}
+						type="text"
+						onChange={(e) => props.onSend(e.target.value)}
+						aria-label="Chat input"
+						placeholder={props.placeholderText || "Type a message"}
+					/>
 				</div>
 			)
 		}),
@@ -131,6 +147,93 @@ jest.mock("@vscode/webview-ui-toolkit/react", () => ({
 		return <a href={href}>{children}</a>
 	},
 }))
+
+describe("ChatView - API Metrics Tests", () => {
+	beforeEach(() => {
+		jest.clearAllMocks()
+	})
+
+	it("displays thinking tokens when present in API response", () => {
+		render(
+			<ExtensionStateContextProvider>
+				<ChatView
+					isHidden={false}
+					showAnnouncement={false}
+					hideAnnouncement={() => {}}
+					showHistoryView={() => {}}
+				/>
+			</ExtensionStateContextProvider>,
+		)
+
+		// Mock API request with thinking tokens
+		mockPostMessage({
+			clineMessages: [
+				{
+					type: "say",
+					say: "task",
+					ts: Date.now() - 2000,
+					text: "Task with thinking",
+				},
+				{
+					type: "say",
+					say: "api_req_started",
+					ts: Date.now() - 1000,
+					text: JSON.stringify({
+						request: "API request",
+						tokensIn: 100,
+						tokensOut: 50,
+						thoughtsTokenCount: 75,
+						thinkingBudget: 200,
+						cost: 0.05,
+					}),
+				},
+			],
+		})
+
+		// Verify thinking tokens are displayed
+		const thinkingTokens = screen.getByTestId("thinking-tokens")
+		expect(thinkingTokens).toHaveTextContent("75/200")
+	})
+
+	it("does not display thinking section when no thinking tokens in API response", () => {
+		render(
+			<ExtensionStateContextProvider>
+				<ChatView
+					isHidden={false}
+					showAnnouncement={false}
+					hideAnnouncement={() => {}}
+					showHistoryView={() => {}}
+				/>
+			</ExtensionStateContextProvider>,
+		)
+
+		// Mock API request without thinking tokens
+		mockPostMessage({
+			clineMessages: [
+				{
+					type: "say",
+					say: "task",
+					ts: Date.now() - 2000,
+					text: "Task without thinking",
+				},
+				{
+					type: "say",
+					say: "api_req_started",
+					ts: Date.now() - 1000,
+					text: JSON.stringify({
+						request: "API request",
+						tokensIn: 100,
+						tokensOut: 50,
+						cost: 0.05,
+					}),
+				},
+			],
+		})
+
+		// Verify thinking tokens section is not present
+		expect(screen.queryByTestId("thinking-tokens")).toBeNull()
+	})
+})
 
 // Mock window.postMessage to trigger state hydration
 const mockPostMessage = (state: Partial<ExtensionState>) => {

@@ -71,7 +71,9 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 				<div className="flex justify-between items-center gap-2">
 					<div
 						className="flex items-center cursor-pointer -ml-0.5 select-none grow min-w-0"
-						onClick={() => setIsTaskExpanded(!isTaskExpanded)}>
+						onClick={() => setIsTaskExpanded(!isTaskExpanded)}
+						data-testid="task-header" // Added data-testid here
+					>
 						<div className="flex items-center shrink-0">
 							<span className={`codicon codicon-chevron-${isTaskExpanded ? "down" : "right"}`}></span>
 						</div>

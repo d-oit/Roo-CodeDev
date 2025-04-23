@@ -443,8 +443,7 @@ export class VsCodeLmHandler extends BaseProvider implements SingleCompletionHan
 			yield {
 				type: "usage",
 				inputTokens: totalInputTokens,
-				outputTokens: totalOutputTokens,
-				totalCost: calculateApiCostAnthropic(this.getModel().info, totalInputTokens, totalOutputTokens),
+				outputTokens: totalOutputTokens
 			}
 		} catch (error: unknown) {
 			this.ensureCleanState()

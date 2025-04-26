@@ -54,8 +54,7 @@ jest.mock("@/utils/format", () => ({
 	},
 }))
 
-// Create a wrapper component that forces expanded state
-const ExpandedTaskHeader: React.FC<React.ComponentProps<typeof TaskHeader>> = (props) => {
+const ExpandedTaskHeaderWrapper: React.FC<React.ComponentProps<typeof TaskHeader>> = (props) => {
 	// Override useState to force expanded state
 	React.useState = jest.fn(() => [true, jest.fn()]) as any
 	return <TaskHeader {...props} />
@@ -165,7 +164,7 @@ describe("TaskHeader thinking metrics", () => {
 
 	it("should display thinking metrics when both thoughtsTokenCount and thinkingBudget are present and > 0", async () => {
 		render(
-			<ExpandedTaskHeader
+			<ExpandedTaskHeaderWrapper
 				{...defaultProps}
 				thoughtsTokenCount={500}
 				thinkingBudget={1000}
@@ -258,7 +257,7 @@ describe("TaskHeader thinking metrics edge cases", () => {
 
 	it("should handle and format large numbers in thinking metrics", () => {
 		render(
-			<ExpandedTaskHeader
+			<ExpandedTaskHeaderWrapper
 				{...defaultProps}
 				thoughtsTokenCount={1234567}
 				thinkingBudget={9876543}
@@ -313,7 +312,7 @@ describe("TaskHeader thinking metrics edge cases", () => {
 
 	it("should format small numbers without abbreviation", () => {
 		render(
-			<ExpandedTaskHeader
+			<ExpandedTaskHeaderWrapper
 				{...defaultProps}
 				thoughtsTokenCount={123}
 				thinkingBudget={456}

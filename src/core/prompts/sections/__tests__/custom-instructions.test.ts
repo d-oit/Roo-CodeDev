@@ -298,6 +298,9 @@ describe("loadRuleFiles", () => {
 describe("addCustomInstructions", () => {
 	beforeEach(() => {
 		jest.clearAllMocks()
+		// Default mocks for rule loading to prevent errors in tests focused on custom instructions
+		statMock.mockRejectedValue({ code: "ENOENT" }) // Simulate no .roo/rules-mode or .roo/rules dir
+		readFileMock.mockRejectedValue({ code: "ENOENT" }) // Simulate no rule files
 	})
 
 	it("should combine all instruction types when provided", async () => {
@@ -565,6 +568,130 @@ describe("addCustomInstructions", () => {
 		expect(result).toContain("mode specific rule content")
 
 		expect(statCallCount).toBeGreaterThan(0)
+	})
+
+	it("should prioritize mode-specific instructions and only add different global instructions", async () => {
+		const modeInstructions = "Mode-specific content"
+		const globalInstructions = "Global content"
+		// Simulate no rule files for simplicity in this test
+		statMock.mockRejectedValue({ code: "ENOENT" })
+		readFileMock.mockRejectedValue({ code: "ENOENT" })
+
+		const result = await addCustomInstructions(modeInstructions, globalInstructions, "/fake/path", "test-mode", {})
+		expect(result).toContain(`Mode-specific Instructions:\n${modeInstructions}`)
+		expect(result).toContain(`Global Instructions:\n${globalInstructions}`)
+		// Ensure Mode-specific appears before Global
+		expect(result.indexOf(`Mode-specific Instructions:\n${modeInstructions}`)).toBeLessThan(
+			result.indexOf(`Global Instructions:\n${globalInstructions}`),
+		)
+	})
+
+	it("should only add mode-specific instructions if global instructions are identical", async () => {
+		const sharedInstructions = "Shared content"
+		// Simulate no rule files
+		statMock.mockRejectedValue({ code: "ENOENT" })
+		readFileMock.mockRejectedValue({ code: "ENOENT" })
+
+		const result = await addCustomInstructions(
+			sharedInstructions,
+			sharedInstructions,
+			"/fake/path",
+			"test-mode",
+			{},
+		)
+		expect(result).toContain(`Mode-specific Instructions:\n${sharedInstructions}`)
+		expect(result).not.toContain("Global Instructions:")
+	})
+
+	it("should only add global instructions if mode-specific instructions are empty", async () => {
+		const globalInstructions = "Global content only"
+		// Simulate no rule files
+		statMock.mockRejectedValue({ code: "ENOENT" })
+		readFileMock.mockRejectedValue({ code: "ENOENT" })
+
+		const result = await addCustomInstructions("", globalInstructions, "/fake/path", "test-mode", {})
+		expect(result).not.toContain("Mode-specific Instructions:")
+		expect(result).toContain(`Global Instructions:\n${globalInstructions}`)
+	})
+
+	it("should only add mode-specific instructions if global instructions are empty", async () => {
+		const modeInstructions = "Mode-specific content only"
+		// Simulate no rule files
+		statMock.mockRejectedValue({ code: "ENOENT" })
+		readFileMock.mockRejectedValue({ code: "ENOENT" })
+
+		const result = await addCustomInstructions(modeInstructions, "", "/fake/path", "test-mode", {})
+		expect(result).toContain(`Mode-specific Instructions:\n${modeInstructions}`)
+		expect(result).not.toContain("Global Instructions:")
+	})
+
+	it("should handle both instructions being empty strings", async () => {
+		// Simulate no rule files
+		statMock.mockRejectedValue({ code: "ENOENT" })
+		readFileMock.mockRejectedValue({ code: "ENOENT" })
+
+		const result = await addCustomInstructions("", "", "/fake/path", "test-mode", {})
+		expect(result).not.toContain("Mode-specific Instructions:")
+		expect(result).not.toContain("Global Instructions:")
+		// If rules are also empty, the result should be an empty string (as per existing test "should return empty string when no instructions provided")
+		// If there were rules, it would contain the rules section.
+	})
+
+	it("should handle mode-specific instructions with whitespace and global instructions with content", async () => {
+		const globalInstructions = "Global content"
+		// Simulate no rule files
+		statMock.mockRejectedValue({ code: "ENOENT" })
+		readFileMock.mockRejectedValue({ code: "ENOENT" })
+
+		const result = await addCustomInstructions("   ", globalInstructions, "/fake/path", "test-mode", {})
+		expect(result).not.toContain("Mode-specific Instructions:")
+		expect(result).toContain(`Global Instructions:\n${globalInstructions}`)
+	})
+
+	it("should handle global instructions with whitespace and mode-specific instructions with content", async () => {
+		const modeInstructions = "Mode-specific content"
+		// Simulate no rule files
+		statMock.mockRejectedValue({ code: "ENOENT" })
+		readFileMock.mockRejectedValue({ code: "ENOENT" })
+
+		const result = await addCustomInstructions(modeInstructions, "   ", "/fake/path", "test-mode", {})
+		expect(result).toContain(`Mode-specific Instructions:\n${modeInstructions}`)
+		expect(result).not.toContain("Global Instructions:")
+	})
+
+	it("should correctly handle the scenario described by the user (duplicate content from different sources)", async () => {
+		const userGlobalInstructions = 'start text "Custom Instructions for All Modes" text end'
+		const modeDefaultInstructions =
+			"You can analyze code, explain concepts, and access external resources. Make sure to answer the user's questions and don't rush to switch to implementing code. Include Mermaid diagrams if they help make your response clearer."
+
+		// Simulate no rule files
+		statMock.mockRejectedValue({ code: "ENOENT" })
+		readFileMock.mockRejectedValue({ code: "ENOENT" })
+
+		// Scenario 1: Mode instructions are the default, global are different (user-entered)
+		let result = await addCustomInstructions(
+			modeDefaultInstructions,
+			userGlobalInstructions,
+			"/fake/path",
+			"ask-mode",
+			{},
+		)
+		expect(result).toContain(`Mode-specific Instructions:\n${modeDefaultInstructions}`)
+		expect(result).toContain(`Global Instructions:\n${userGlobalInstructions}`)
+		expect(result.indexOf(`Mode-specific Instructions:\n${modeDefaultInstructions}`)).toBeLessThan(
+			result.indexOf(`Global Instructions:\n${userGlobalInstructions}`),
+		)
+
+		// Scenario 2: Mode instructions and global instructions are identical (e.g. user copies mode default into global)
+		result = await addCustomInstructions(
+			modeDefaultInstructions,
+			modeDefaultInstructions,
+			"/fake/path",
+			"ask-mode",
+			{},
+		)
+		expect(result).toContain(`Mode-specific Instructions:\n${modeDefaultInstructions}`)
+		expect(result).not.toContain("Global Instructions:\n") // Note: checking for "Global Instructions:\n" to ensure the section header isn't there
 	})
 })
 

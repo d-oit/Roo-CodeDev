@@ -74,6 +74,7 @@ export const commandIds = [
 
 	"focusInput",
 	"acceptInput",
+	"playgroundChat",
 ] as const
 
 export type CommandId = (typeof commandIds)[number]
